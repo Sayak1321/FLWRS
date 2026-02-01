@@ -2,23 +2,74 @@ import * as THREE from "three";
 import { OrbitControls } from "https://cdn.jsdelivr.net/npm/three@0.152.2/examples/jsm/controls/OrbitControls.js";
 import { createNoise2D, createNoise3D } from "https://cdn.jsdelivr.net/npm/simplex-noise@4.0.1/dist/esm/simplex-noise.js";
 import * as dat from "https://cdn.jsdelivr.net/npm/dat.gui@0.7.9/build/dat.gui.module.js";
+import { EffectComposer } from "https://cdn.jsdelivr.net/npm/three@0.152.2/examples/jsm/postprocessing/EffectComposer.js";
+import { RenderPass } from "https://cdn.jsdelivr.net/npm/three@0.152.2/examples/jsm/postprocessing/RenderPass.js";
+import { UnrealBloomPass } from "https://cdn.jsdelivr.net/npm/three@0.152.2/examples/jsm/postprocessing/UnrealBloomPass.js";
+
 
 const noise2D = createNoise2D();
 const noise3D = createNoise3D();
 
 const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x000000);
+
 
 const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 1000);
 camera.position.set(0, 15, 45);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ReinhardToneMapping;
+renderer.toneMappingExposure = 2.2;
 document.body.appendChild(renderer.domElement);
 
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+
+const bloomPass = new UnrealBloomPass(
+  new THREE.Vector2(window.innerWidth, window.innerHeight),
+  2.2,  // strength (glow power)
+  0.8,  // radius (spread)
+  0.1   // threshold (LOW = more glow)
+);
+
+const petalVertexShader = `
+varying float vPos;
+
+void main() {
+  vPos = position.x; // along petal length
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+}
+`;
+
+const petalFragmentShader = `
+varying float vPos;
+
+void main() {
+  float t = clamp(vPos, 0.0, 1.0);
+
+  vec3 baseColor = vec3(1.0, 0.6, 0.0);   // orange base
+  vec3 tipColor  = vec3(1.0, 1.0, 0.2);   // bright yellow tip
+
+  vec3 color = mix(baseColor, tipColor, t);
+
+  gl_FragColor = vec4(color * 1.8, 1.0); // HDR boost for bloom
+}
+`;
+
+
+composer.addPass(bloomPass);
+
+
+
 window.addEventListener("resize", () => {
-  camera.aspect = window.innerWidth / window.innerHeight;
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+  camera.aspect = w / h;
   camera.updateProjectionMatrix();
-  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.setSize(w, h);
+  composer.setSize(w, h);
 });
 
 //
@@ -31,23 +82,35 @@ controls.enableDamping = true;
 // 🎛 Flower DNA Controls
 //
 const params = {
-  petalCount: 240,
-  petalLength: 18,
-  petalSharpness: 4,
-  twist: 0.5,
-  noiseStrength: 0.4,
-  growthSpeed: 0.002,
-  hueShift: 1.5,
-  leafCount: 4
+  // 🌻 sunflower core
+  seedCount: 1200,
+  spread: 0.60,
+  lineLength: 1.2,
+  hueShift: 0.2,
+
+  // 🌼 petal layers
+  innerPetals: 1000,
+  outerPetals: 1200,
+  petalSize: 1.0,
+  petalWidth: 0.4,
+
+  // animation
+  growthSpeed: 0.0015
 };
 
+
 const gui = new dat.GUI();
-gui.add(params, "petalCount", 50, 400, 1).onFinishChange(rebuildPlant);
-gui.add(params, "petalLength", 5, 30).onFinishChange(rebuildPlant);
-gui.add(params, "petalSharpness", 2, 10, 1).onFinishChange(rebuildPlant);
-gui.add(params, "twist", 0, 2).onFinishChange(rebuildPlant);
-gui.add(params, "noiseStrength", 0, 1).onFinishChange(rebuildPlant);
-gui.add(params, "leafCount", 1, 8, 1).onFinishChange(rebuildPlant);
+gui.add(params, "seedCount", 200, 3000, 10).onFinishChange(rebuildPlant);
+gui.add(params, "spread", 0.1, 1).onFinishChange(rebuildPlant);
+gui.add(params, "lineLength", 0.2, 3).onFinishChange(rebuildPlant);
+gui.add(params, "innerPetals", 5, 2000, 1).onFinishChange(rebuildPlant);
+gui.add(params, "outerPetals", 10, 3000, 1).onFinishChange(rebuildPlant);
+gui.add(params, "petalSize", 0, 1).onFinishChange(rebuildPlant);
+gui.add(params, "petalWidth", 0, 5).onFinishChange(rebuildPlant);
+gui.add(bloomPass, "strength", 0, 3).onFinishChange(rebuildPlant);
+gui.add(bloomPass, "radius", 0, 1).onFinishChange(rebuildPlant);
+gui.add(bloomPass, "threshold", 0, 1).onFinishChange(rebuildPlant);
+
 
 //
 // 🌱 Growth
@@ -95,39 +158,80 @@ function updateStem() {
 //
 // 🌸 GEOMETRIC PETALS
 //
+
+function createPetalRing(count, baseRadius, hue, tiltAmount) {
+  const goldenAngle = Math.PI * (3 - Math.sqrt(5));
+
+  for (let i = 0; i < count; i++) {
+
+    const angle = i * goldenAngle;
+    const radius = baseRadius + Math.sqrt(i) * 0.8;
+
+    const x = radius * Math.cos(angle);
+    const z = radius * Math.sin(angle);
+
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.Float32BufferAttribute([
+      -params.petalWidth, 0, 0,
+      params.petalSize, 0, 0,
+      params.petalWidth, 0, 0
+    ], 3));
+
+    const material = new THREE.ShaderMaterial({
+  vertexShader: petalVertexShader,
+  fragmentShader: petalFragmentShader
+    });
+
+    const petal = new THREE.Line(geometry, material);
+
+    // Position petal
+    petal.position.set(x, 25, z);
+
+    // Face outward from center
+    petal.lookAt(0, 25, 0);
+
+    // Tilt outward
+    petal.rotation.z = tiltAmount;
+
+    petals.add(petal);
+  }
+}
+
 function createPetals() {
   petals.clear();
-  const k = params.petalSharpness;
 
-  for (let i = 0; i < params.petalCount; i++) {
+  const goldenAngle = Math.PI * (3 - Math.sqrt(5));
+
+  // 🌻 CENTER DISC
+  for (let n = 0; n < params.seedCount; n++) {
+    const angle = n * goldenAngle;
+    const radius = params.spread * Math.sqrt(n);
+
+    const x = radius * Math.cos(angle);
+    const z = radius * Math.sin(angle);
+
+    const dx = params.lineLength * Math.cos(angle);
+    const dz = params.lineLength * Math.sin(angle);
+
     const geometry = new THREE.BufferGeometry();
-    const points = [];
+    geometry.setAttribute("position",
+      new THREE.Float32BufferAttribute([x, 25, z, x + dx, 25, z + dz], 3)
+    );
 
-    const baseAngle = (i / params.petalCount) * Math.PI * 2;
-
-    for (let j = 0; j < 80; j++) {
-      const t = j / 80;
-      const theta = baseAngle + t * params.twist;
-
-      const r =
-        params.petalLength * Math.sin(k * theta) +
-        noise3D(Math.cos(theta), Math.sin(theta), t) * params.noiseStrength;
-
-      const x = r * Math.cos(theta);
-      const z = r * Math.sin(theta);
-      const y = 25 + t * 2;
-
-      points.push(x, y, z);
-    }
-
-    geometry.setAttribute("position", new THREE.Float32BufferAttribute(points, 3));
     const material = new THREE.LineBasicMaterial({
-      color: new THREE.Color(`hsl(${i * params.hueShift}, 100%, 65%)`)
+      color: new THREE.Color(`hsl(${n * params.hueShift}, 100%, 60%)`)
     });
 
     petals.add(new THREE.Line(geometry, material));
   }
+
+  // inner layer (denser, smaller spread)
+  createPetalRing(params.innerPetals, 16, 45, Math.PI / 10);
+
+  // outer layer (larger spiral)
+  createPetalRing(params.outerPetals, 22, 55, Math.PI / 4);
 }
+
 
 function updatePetals() {
   const bloom = Math.max(0, (growth - 0.5) * 2);
@@ -192,7 +296,8 @@ function animate() {
   updateLeaves();
 
   controls.update();
-  renderer.render(scene, camera);
+  composer.render();
+
 }
 
 animate();
