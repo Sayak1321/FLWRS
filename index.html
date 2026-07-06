@@ -4,10 +4,134 @@
   <title>Growing Procedural Flower</title>
   <style>
     body { margin: 0; overflow: hidden; background: black; }
+
+    /* ============================================================
+       GLASSMORPHIC DASHBOARD  (additive — sits above the existing
+       dat.gui panel, does not touch any prior rendering logic)
+    ============================================================ */
+    * { box-sizing: border-box; }
+    #bloomPanel {
+      position: fixed;
+      top: 24px;
+      left: 24px;
+      width: 260px;
+      padding: 16px 16px 14px;
+      background: rgba(15, 15, 20, 0.6);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 14px;
+      box-shadow: 0 12px 36px rgba(0,0,0,0.35);
+      color: rgba(240,242,248,0.92);
+      font-family: 'Inter', system-ui, -apple-system, sans-serif;
+      z-index: 20;
+      transition: transform .3s ease, opacity .3s ease;
+    }
+    #bloomPanel.collapsed { transform: translateX(-120%); opacity: 0; pointer-events: none; }
+    #bloomPanel h1 {
+      font-size: 11px; letter-spacing: .14em; text-transform: uppercase;
+      font-weight: 600; margin: 0 0 12px; color: rgba(235,238,245,.55);
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    #bloomPanel h1 .dot {
+      width: 6px; height: 6px; border-radius: 50%; background: #ff8a6b;
+      box-shadow: 0 0 8px #ff8a6b; display: inline-block; margin-right: 6px;
+    }
+    #bloomPanel .field { margin-bottom: 12px; }
+    #bloomPanel label {
+      display: flex; justify-content: space-between; font-size: 11px;
+      color: rgba(235,238,245,.55); margin-bottom: 5px;
+    }
+    #bloomPanel label b { color: #fff; font-variant-numeric: tabular-nums; }
+    #bloomPanel input[type="range"] {
+      -webkit-appearance: none; width: 100%; height: 3px; border-radius: 2px;
+      background: rgba(255,255,255,0.12); outline: none;
+    }
+    #bloomPanel input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none; width: 12px; height: 12px; border-radius: 50%;
+      background: #ff8a6b; box-shadow: 0 0 6px rgba(255,138,107,.8);
+      cursor: pointer; border: 2px solid rgba(10,10,14,.9);
+    }
+    #bloomPanel select {
+      width: 100%; background: rgba(255,255,255,.06);
+      border: 1px solid rgba(255,255,255,.08); color: #fff; font-size: 12px;
+      padding: 7px 8px; border-radius: 8px; outline: none; cursor: pointer;
+      font-family: inherit;
+    }
+    #bloomPanel .row { display: flex; gap: 8px; }
+    #bloomPanel .btn {
+      flex: 1; background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.08);
+      color: #fff; font-size: 12px; padding: 8px 0; border-radius: 9px; cursor: pointer;
+      font-family: inherit; transition: background .15s ease;
+    }
+    #bloomPanel .btn:hover { background: rgba(255,255,255,.12); }
+    #bloomPanel .btn.primary {
+      background: rgba(255,138,107,.16); border-color: rgba(255,138,107,.35); color: #ff8a6b;
+    }
+    #bloomPanel .btn.primary:hover { background: rgba(255,138,107,.26); }
+    #bloomPanel .divider { height: 1px; background: rgba(255,255,255,.08); margin: 12px 0; }
+
+    #bloomTab {
+      position: fixed; top: 24px; left: 24px; z-index: 21;
+      width: 34px; height: 34px; border-radius: 10px;
+      background: rgba(15,15,20,.6); backdrop-filter: blur(12px);
+      border: 1px solid rgba(255,255,255,.08); color: #fff;
+      display: flex; align-items: center; justify-content: center;
+      cursor: pointer; font-size: 13px; opacity: 0; pointer-events: none;
+      transition: opacity .3s ease; font-family: 'Inter', system-ui, sans-serif;
+    }
+    #bloomTab.visible { opacity: 1; pointer-events: auto; }
   </style>
 </head>
 <body>
-    <script type="importmap">
+
+  <!-- ============================================================
+       GLASS DASHBOARD (see gemini-code.md spec) — purely additive UI.
+       All controls call into the existing param/update functions in
+       script.js; no prior flower/shader/wind logic is modified.
+  ============================================================ -->
+  <button id="bloomTab" title="Show panel">☰</button>
+  <div id="bloomPanel">
+    <h1><span><span class="dot"></span>BLOOM DASHBOARD</span>
+      <span id="bloomClose" style="cursor:pointer;opacity:.6;">✕</span>
+    </h1>
+
+    <div class="field">
+      <label>Flowers in field <b id="valFlowers">5</b></label>
+      <input type="range" id="ctrlFlowers" min="1" max="20" step="1" value="5" />
+    </div>
+
+    <div class="field">
+      <label>Growth speed <b id="valSpeed">1.0×</b></label>
+      <input type="range" id="ctrlSpeed" min="0.2" max="4" step="0.1" value="1" />
+    </div>
+
+    <div class="field">
+      <label>Atmosphere density <b id="valDensity">400</b></label>
+      <input type="range" id="ctrlDensity" min="0" max="1200" step="20" value="400" />
+    </div>
+
+    <div class="field">
+      <label>Palette</label>
+      <select id="ctrlPalette">
+        <option value="solar">Solar Glow</option>
+        <option value="neon">Bioluminescent Neon</option>
+        <option value="pastel" selected>Vintage Pastel (Lycoris)</option>
+      </select>
+    </div>
+
+    <div class="divider"></div>
+
+    <div class="row" style="margin-bottom:8px;">
+      <button class="btn" id="btnRewind">⟲ Rewind</button>
+      <button class="btn" id="btnPlay">⏸ Pause</button>
+    </div>
+    <div class="row">
+      <button class="btn primary" id="btnExport">⬇ Export PNG</button>
+    </div>
+  </div>
+
+  <script type="importmap">
 {
   "imports": {
     "three": "https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.module.js"

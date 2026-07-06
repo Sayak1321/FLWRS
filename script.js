@@ -24,6 +24,40 @@ import { UnrealBloomPass } from "https://cdn.jsdelivr.net/npm/three@0.152.2/exam
 const baseNoise2D  = createNoise2D(); // slow, high-amplitude stem sway
 const microNoise2D = createNoise2D(); // fast, low-amplitude stamen tremor
 
+/* ------------------------------------------------------------
+   Lightweight self-contained 2D value-noise, used only by the
+   new atmospheric spore system below (per gemini-code.md — kept
+   separate from the simplex noise already driving the plant so
+   none of the existing wind/growth behaviour changes).
+------------------------------------------------------------ */
+function makeLocalNoise2D(seed = 977) {
+  const perm = new Uint8Array(512);
+  const p = new Uint8Array(256);
+  for (let i = 0; i < 256; i++) p[i] = i;
+  let s = seed;
+  const rand = () => ((s = (s * 9301 + 49297) % 233280) / 233280);
+  for (let i = 255; i > 0; i--) {
+    const j = Math.floor(rand() * (i + 1));
+    const t = p[i]; p[i] = p[j]; p[j] = t;
+  }
+  for (let i = 0; i < 512; i++) perm[i] = p[i & 255];
+  const fade = t => t * t * t * (t * (t * 6 - 15) + 10);
+  const lerp = (a, b, t) => a + t * (b - a);
+  const grad = (h, x, y) => { const u = (h & 2) ? -x : x, v = (h & 1) ? -y : y; return u + v; };
+  return (x, y) => {
+    const X = Math.floor(x) & 255, Y = Math.floor(y) & 255;
+    const xf = x - Math.floor(x), yf = y - Math.floor(y);
+    const u = fade(xf), v = fade(yf);
+    const aa = perm[X + perm[Y]], ab = perm[X + perm[Y + 1]];
+    const ba = perm[X + 1 + perm[Y]], bb = perm[X + 1 + perm[Y + 1]];
+    return lerp(
+      lerp(grad(aa, xf, yf), grad(ba, xf - 1, yf), u),
+      lerp(grad(ab, xf, yf - 1), grad(bb, xf - 1, yf - 1), u), v
+    );
+  };
+}
+const sporeNoise2D = makeLocalNoise2D(2024);
+
 /* ============================================================
    SCENE / RENDERER / CAMERA / POST-PROCESSING
 ============================================================ */
@@ -36,7 +70,9 @@ const camera = new THREE.PerspectiveCamera(
 );
 camera.position.set(0, 38, 88);
 
-const renderer = new THREE.WebGLRenderer({ antialias: true });
+// preserveDrawingBuffer enables the new "Export PNG" dashboard action
+// to read back the canvas pixels; does not affect rendering behaviour.
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -82,6 +118,63 @@ groundMesh.rotation.x = -Math.PI / 2;
 scene.add(groundMesh);
 
 /* ============================================================
+   ATMOSPHERIC SPORES  (additive — "Background Environment" from
+   gemini-code.md). A soft, glowing THREE.Points cloud that drifts
+   gently upward and fades, density controlled from the dashboard.
+   Entirely separate system; does not touch the plant/flower code.
+============================================================ */
+const SPORE_MAX = 1200;
+const sporeGeo = new THREE.BufferGeometry();
+const sporePos = new Float32Array(SPORE_MAX * 3);
+const sporeSeed = new Float32Array(SPORE_MAX); // per-particle phase/speed seed
+const sporeField = { x: 220, y: 90, z: 220 };
+
+for (let i = 0; i < SPORE_MAX; i++) {
+  sporePos[i * 3]     = (Math.random() - 0.5) * sporeField.x;
+  sporePos[i * 3 + 1] = Math.random() * sporeField.y;
+  sporePos[i * 3 + 2] = (Math.random() - 0.5) * sporeField.z;
+  sporeSeed[i] = Math.random() * 1000;
+}
+sporeGeo.setAttribute("position", new THREE.BufferAttribute(sporePos, 3));
+
+const sporeMat = new THREE.PointsMaterial({
+  color: 0xffcf9e,
+  size: 0.5,
+  transparent: true,
+  opacity: 0.55,
+  depthWrite: false,
+  blending: THREE.AdditiveBlending,
+});
+const sporePoints = new THREE.Points(sporeGeo, sporeMat);
+sporePoints.frustumCulled = false;
+scene.add(sporePoints);
+
+function setSporeCount(count) {
+  sporeGeo.setDrawRange(0, THREE.MathUtils.clamp(count, 0, SPORE_MAX));
+}
+setSporeCount(400);
+
+function updateSpores(dt, time) {
+  const posAttr = sporeGeo.attributes.position;
+  const drawCount = sporeGeo.drawRange.count;
+  for (let i = 0; i < drawCount; i++) {
+    const seed = sporeSeed[i];
+    let y = posAttr.array[i * 3 + 1];
+    y += (0.06 + 0.05 * Math.sin(seed)) * dt;
+    if (y > sporeField.y) y = 0; // recycle from the ground once it drifts too high
+    posAttr.array[i * 3 + 1] = y;
+
+    // gentle horizontal wobble via the self-contained noise field
+    const wob = sporeNoise2D(time * 0.05 + seed, seed * 0.7) * 0.04;
+    posAttr.array[i * 3] += wob;
+  }
+  posAttr.needsUpdate = true;
+
+  // fade the whole cloud in/out slightly with a slow breathing pulse
+  sporeMat.opacity = 0.4 + Math.sin(time * 0.3) * 0.1;
+}
+
+/* ============================================================
    PARAMETERS
 ============================================================ */
 const params = {
@@ -103,7 +196,33 @@ const params = {
   bloomStrength:  bloomPass.strength,
   bloomRadius:    bloomPass.radius,
   bloomThreshold: bloomPass.threshold,
+
+  // --- new dashboard-only additions (gemini-code.md) ---
+  particleDensity: 400,
+  palette: "pastel",
 };
+
+/* ============================================================
+   PALETTE PRESETS (dashboard-only convenience — just sets the
+   existing hue/sat/light params + spore tint to a named look;
+   doesn't add any new colour system to the plant itself)
+============================================================ */
+const PALETTE_PRESETS = {
+  solar:  { hueBase: 0.08, hueTip: 0.15, saturation: 0.9,  lightness: 0.55, sporeColor: 0xffcf9e },
+  neon:   { hueBase: 0.55, hueTip: 0.85, saturation: 1.0,  lightness: 0.55, sporeColor: 0x8affe6 },
+  pastel: { hueBase: 0.0,  hueTip: 0.04, saturation: 1.0,  lightness: 0.45, sporeColor: 0xffcf9e }, // original Lycoris crimson
+};
+
+function applyPalette(name) {
+  const p = PALETTE_PRESETS[name];
+  if (!p) return;
+  params.hueBase = p.hueBase;
+  params.hueTip = p.hueTip;
+  params.saturation = p.saturation;
+  params.lightness = p.lightness;
+  sporeMat.color.setHex(p.sporeColor);
+  updateColors();
+}
 
 /* ============================================================
    GLSL HELPERS
@@ -127,6 +246,7 @@ const petalVert = /* glsl */`
   uniform float uWaveAmp;
   uniform float uCurlY;
   uniform float uCurlZ;
+  uniform float uPhase; // per-petal random offset — organic irregularity
 
   varying float vT;
   varying vec3  vWorldNormal;
@@ -139,8 +259,11 @@ const petalVert = /* glsl */`
 
     vec3 pos = position;
 
-    /* lateral crinkle – decays at base & tip for clean attachment */
-    float crinkle = sin(pos.y * uWaveFreq) * uWaveAmp * sin(t * 3.14159265);
+    /* lateral crinkle – decays at base & tip for clean attachment.
+       uPhase (unique per petal) breaks perfect mathematical symmetry
+       between petals so tips read as organically irregular rather
+       than identically stamped copies. */
+    float crinkle = sin(pos.y * uWaveFreq + uPhase) * uWaveAmp * sin(t * 3.14159265);
     pos.x += crinkle;
 
     /* tip curl – aggressive backward & upward bend */
@@ -150,8 +273,8 @@ const petalVert = /* glsl */`
 
     /* analytical normal for correct lighting on deformed mesh */
     float dt = 1.0 / uLength;
-    float dWave = uWaveFreq * cos(position.y*uWaveFreq) * uWaveAmp * sin(t*3.14159265)
-                + sin(position.y*uWaveFreq) * uWaveAmp * cos(t*3.14159265) * 3.14159265*dt;
+    float dWave = uWaveFreq * cos(position.y*uWaveFreq + uPhase) * uWaveAmp * sin(t*3.14159265)
+                + sin(position.y*uWaveFreq + uPhase) * uWaveAmp * cos(t*3.14159265) * 3.14159265*dt;
     float dCY = 3.0 * pow(t,2.0) * uCurlY * dt;
     float dCZ = 3.0 * pow(t,2.0) * uCurlZ * dt;
     vec3 tX = vec3(1.0, 0.0, 0.0);
@@ -249,6 +372,7 @@ function makePetalMat() {
       uWaveAmp:    { value: 0.12  },
       uCurlY:      { value: 1.8   },
       uCurlZ:      { value: 2.2   },
+      uPhase:      { value: Math.random() * Math.PI * 2 }, // organic irregularity, unique per petal
       uHueBase:    { value: params.hueBase    },
       uHueTip:     { value: params.hueTip     },
       uSat:        { value: params.saturation },
@@ -263,10 +387,16 @@ function makePetalMat() {
 
 function makeStamenMat(isAnther = false) {
   if (isAnther) {
+    // Pollen glow (gemini-code.md "Luminescent Centers"): strong warm
+    // emissive so the anther/stigma tips read as bioluminescent and
+    // catch the UnrealBloomPass highlight, without changing their
+    // geometry or placement.
     return new THREE.MeshStandardMaterial({
-      color:     0x7a3b1e,
-      roughness: 0.75,
-      metalness: 0.05,
+      color:             0x7a3b1e,
+      roughness:         0.6,
+      metalness:         0.05,
+      emissive:          0xffb066,
+      emissiveIntensity: 1.1,
     });
   }
   return new THREE.ShaderMaterial({
@@ -729,8 +859,101 @@ function animate() {
   const time = clock.elapsedTime;
 
   flowers.forEach(f => f.update(dt, time));
+  updateSpores(dt / 60, time); // dt/60 = real seconds elapsed this frame
 
   controls.update();
   composer.render();
 }
 animate();
+
+/* ============================================================
+   GLASS DASHBOARD WIRING  (additive — mirrors/extends the dat.gui
+   controls above through the new HTML overlay from index.html.
+   Does not replace or remove the dat.gui panel.
+============================================================ */
+const baseGrowthSpeed = params.growthSpeed; // remember default so the
+                                             // dashboard slider can act
+                                             // as a clean multiplier
+
+const $ = (id) => document.getElementById(id);
+const elFlowers = $("ctrlFlowers"), valFlowers = $("valFlowers");
+const elSpeed   = $("ctrlSpeed"),   valSpeed   = $("valSpeed");
+const elDensity = $("ctrlDensity"), valDensity = $("valDensity");
+const elPalette = $("ctrlPalette");
+const elPlay    = $("btnPlay");
+const elRewind  = $("btnRewind");
+const elExport  = $("btnExport");
+const panel     = $("bloomPanel");
+const tab       = $("bloomTab");
+const closeBtn  = $("bloomClose");
+
+if (elFlowers) {
+  elFlowers.addEventListener("change", (e) => {
+    params.flowerCount = parseInt(e.target.value, 10);
+    rebuildField();
+  });
+  elFlowers.addEventListener("input", (e) => {
+    valFlowers.textContent = e.target.value;
+  });
+}
+
+if (elSpeed) {
+  elSpeed.addEventListener("input", (e) => {
+    const mult = parseFloat(e.target.value);
+    params.growthSpeed = baseGrowthSpeed * mult;
+    valSpeed.textContent = mult.toFixed(1) + "×";
+  });
+}
+
+if (elDensity) {
+  elDensity.addEventListener("input", (e) => {
+    params.particleDensity = parseInt(e.target.value, 10);
+    setSporeCount(params.particleDensity);
+    valDensity.textContent = params.particleDensity;
+  });
+}
+
+if (elPalette) {
+  elPalette.addEventListener("change", (e) => applyPalette(e.target.value));
+}
+
+if (elPlay) {
+  elPlay.addEventListener("click", () => {
+    params.autoBloom = !params.autoBloom;
+    elPlay.textContent = params.autoBloom ? "⏸ Pause" : "▶ Play";
+  });
+}
+
+if (elRewind) {
+  elRewind.addEventListener("click", () => {
+    params.autoBloom = true;
+    if (elPlay) elPlay.textContent = "⏸ Pause";
+    params.restartBloom();
+  });
+}
+
+if (elExport) {
+  elExport.addEventListener("click", () => {
+    // The dashboard is a separate HTML overlay (never drawn onto the
+    // WebGL canvas), so reading back the canvas pixels captures the
+    // artwork cleanly with no UI baked in.
+    const link = document.createElement("a");
+    link.download = `lycoris-${Date.now()}.png`;
+    link.href = renderer.domElement.toDataURL("image/png");
+    link.click();
+  });
+}
+
+if (tab && panel && closeBtn) {
+  closeBtn.addEventListener("click", () => {
+    panel.classList.add("collapsed");
+    tab.classList.add("visible");
+  });
+  tab.addEventListener("click", () => {
+    panel.classList.remove("collapsed");
+    tab.classList.remove("visible");
+  });
+}
+
+// sync dashboard particle slider with the initial spore count set above
+setSporeCount(params.particleDensity);
