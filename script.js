@@ -1,3 +1,5 @@
+console.log("%c[script.js] LOADED — petal-fix build v6 (narrow+recurve pass)", "color:#ff8a6b;font-weight:bold;font-size:14px");
+
 /**
  * Japanese Red Spider Lily (Lycoris radiata)
  * Advanced Procedural 3D Digital Artwork
@@ -16,12 +18,13 @@ import * as dat from "https://cdn.jsdelivr.net/npm/dat.gui@0.7.9/build/dat.gui.m
 import { EffectComposer } from "https://cdn.jsdelivr.net/npm/three@0.152.2/examples/jsm/postprocessing/EffectComposer.js";
 import { RenderPass } from "https://cdn.jsdelivr.net/npm/three@0.152.2/examples/jsm/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "https://cdn.jsdelivr.net/npm/three@0.152.2/examples/jsm/postprocessing/UnrealBloomPass.js";
+import { BokehPass } from "https://cdn.jsdelivr.net/npm/three@0.152.2/examples/jsm/postprocessing/BokehPass.js";
 
 /* ============================================================
    NOISE INSTANCES
    Two independent noise fields for base & micro frequencies
 ============================================================ */
-const baseNoise2D  = createNoise2D(); // slow, high-amplitude stem sway
+const baseNoise2D = createNoise2D(); // slow, high-amplitude stem sway
 const microNoise2D = createNoise2D(); // fast, low-amplitude stamen tremor
 
 /* ------------------------------------------------------------
@@ -72,21 +75,100 @@ camera.position.set(0, 38, 88);
 
 // preserveDrawingBuffer enables the new "Export PNG" dashboard action
 // to read back the canvas pixels; does not affect rendering behaviour.
+/* ============================================================
+   PROCEDURAL ENVIRONMENT MAP & UTILITIES
+============================================================ */
+function createProceduralEnvMap(renderer) {
+  const pmremGenerator = new THREE.PMREMGenerator(renderer);
+  pmremGenerator.compileEquirectangularShader();
+
+  const canvas = document.createElement("canvas");
+  canvas.width = 512;
+  canvas.height = 256;
+  const ctx = canvas.getContext("2d");
+
+  // Dark night garden sky gradient (dark teal/blue to pitch black)
+  const grad = ctx.createLinearGradient(0, 0, 0, canvas.height);
+  grad.addColorStop(0, "#0a1622");
+  grad.addColorStop(0.5, "#040910");
+  grad.addColorStop(1, "#000000");
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // Soft red bioluminescent ambient glow
+  ctx.fillStyle = "rgba(180, 50, 20, 0.08)";
+  ctx.beginPath();
+  ctx.arc(128, 128, 120, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Soft green leaf/ambient bounce glow
+  ctx.fillStyle = "rgba(30, 90, 50, 0.05)";
+  ctx.beginPath();
+  ctx.arc(384, 128, 140, 0, Math.PI * 2);
+  ctx.fill();
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.mapping = THREE.EquirectangularReflectionMapping;
+  texture.colorSpace = THREE.SRGBColorSpace;
+
+  const envMap = pmremGenerator.fromEquirectangular(texture).texture;
+  pmremGenerator.dispose();
+  texture.dispose();
+
+  return envMap;
+}
+
+function createCircularParticleTexture() {
+  const canvas = document.createElement("canvas");
+  canvas.width = 64;
+  canvas.height = 64;
+  const ctx = canvas.getContext("2d");
+
+  const grad = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+  grad.addColorStop(0, "rgba(255, 255, 255, 1.0)");
+  grad.addColorStop(0.25, "rgba(255, 240, 220, 0.85)");
+  grad.addColorStop(0.5, "rgba(255, 200, 160, 0.35)");
+  grad.addColorStop(1, "rgba(255, 200, 160, 0.0)");
+
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, 64, 64);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  return texture;
+}
+
 const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.outputColorSpace = THREE.SRGBColorSpace;
-renderer.toneMapping = THREE.ReinhardToneMapping;
-renderer.toneMappingExposure = 1.9;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.35;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 document.body.appendChild(renderer.domElement);
+
+const envMap = createProceduralEnvMap(renderer);
+scene.environment = envMap;
 
 const composer = new EffectComposer(renderer);
 composer.addPass(new RenderPass(scene, camera));
+
+// Cinematic Bloom
 const bloomPass = new UnrealBloomPass(
   new THREE.Vector2(window.innerWidth, window.innerHeight),
-  0.25, 0.7, 0.15  // balanced so stamens stay razor-sharp
+  0.3, 0.75, 0.18
 );
 composer.addPass(bloomPass);
+
+// Cinematic Bokeh Depth of Field
+const bokehPass = new BokehPass(scene, camera, {
+  focus: 89.0,
+  aperture: 0.0006, // extremely subtle aperture for realistic macro bokeh
+  maxblur: 0.012,
+  width: window.innerWidth,
+  height: window.innerHeight
+});
+composer.addPass(bokehPass);
 
 window.addEventListener("resize", () => {
   camera.aspect = window.innerWidth / window.innerHeight;
@@ -101,20 +183,60 @@ controls.dampingFactor = 0.06;
 controls.target.set(0, 22, 0);
 
 /* Lights */
-scene.add(new THREE.AmbientLight(0x180808, 2.0));
-const keyLight = new THREE.DirectionalLight(0xfff0e8, 1.2);
-keyLight.position.set(15, 40, 20);
+scene.add(new THREE.AmbientLight(0x0a0505, 1.2)); // dark, physical ambient occlusion
+
+const keyLight = new THREE.DirectionalLight(0xfff5ea, 1.6); // strong warm sun
+keyLight.position.set(25, 55, 30);
+keyLight.castShadow = true;
+keyLight.shadow.mapSize.width = 2048;
+keyLight.shadow.mapSize.height = 2048;
+keyLight.shadow.camera.near = 0.5;
+keyLight.shadow.camera.far = 160;
+const d = 45;
+keyLight.shadow.camera.left = -d;
+keyLight.shadow.camera.right = d;
+keyLight.shadow.camera.top = d;
+keyLight.shadow.camera.bottom = -d;
+keyLight.shadow.bias = -0.0003;
 scene.add(keyLight);
-const fillLight = new THREE.DirectionalLight(0x1a0a0a, 0.6);
-fillLight.position.set(-20, 10, -10);
+
+const fillLight = new THREE.DirectionalLight(0x0e131f, 0.85); // soft night sky fill
+fillLight.position.set(-25, 15, -20);
 scene.add(fillLight);
 
 /* Ground */
+const groundMat = new THREE.MeshStandardMaterial({
+  color: 0x050806, // wet soil / mud
+  roughness: 0.88,
+  metalness: 0.08,
+});
+groundMat.onBeforeCompile = (shader) => {
+  shader.fragmentShader = shader.fragmentShader.replace(
+    '#include <color_fragment>',
+    `
+    #include <color_fragment>
+    // Procedural color variance for wet mud and moss
+    float mudNoise = sin(vViewPosition.x * 0.4) * cos(vViewPosition.z * 0.4) * 0.15 + 0.85;
+    diffuseColor.rgb *= mudNoise;
+    `
+  );
+  shader.fragmentShader = shader.fragmentShader.replace(
+    '#include <normal_fragment_begin>',
+    `
+    #include <normal_fragment_begin>
+    // Procedural micro-bump texture for ground roughness
+    float bumpNoise = sin(vViewPosition.x * 2.5) * sin(vViewPosition.z * 2.5) * 0.1;
+    normal = normalize(normal + bumpNoise * normal);
+    `
+  );
+};
+
 const groundMesh = new THREE.Mesh(
   new THREE.CircleGeometry(300, 64),
-  new THREE.MeshStandardMaterial({ color: 0x020905, roughness: 1 })
+  groundMat
 );
 groundMesh.rotation.x = -Math.PI / 2;
+groundMesh.receiveShadow = true;
 scene.add(groundMesh);
 
 /* ============================================================
@@ -130,7 +252,7 @@ const sporeSeed = new Float32Array(SPORE_MAX); // per-particle phase/speed seed
 const sporeField = { x: 220, y: 90, z: 220 };
 
 for (let i = 0; i < SPORE_MAX; i++) {
-  sporePos[i * 3]     = (Math.random() - 0.5) * sporeField.x;
+  sporePos[i * 3] = (Math.random() - 0.5) * sporeField.x;
   sporePos[i * 3 + 1] = Math.random() * sporeField.y;
   sporePos[i * 3 + 2] = (Math.random() - 0.5) * sporeField.z;
   sporeSeed[i] = Math.random() * 1000;
@@ -139,7 +261,8 @@ sporeGeo.setAttribute("position", new THREE.BufferAttribute(sporePos, 3));
 
 const sporeMat = new THREE.PointsMaterial({
   color: 0xffcf9e,
-  size: 0.5,
+  size: 1.4, // larger size because it fades out at the edges
+  map: createCircularParticleTexture(),
   transparent: true,
   opacity: 0.55,
   depthWrite: false,
@@ -178,24 +301,27 @@ function updateSpores(dt, time) {
    PARAMETERS
 ============================================================ */
 const params = {
-  flowerCount:    5,
-  fieldSpacing:   14,
-  growthSpeed:    0.0008,
-  windIntensity:  1.0,
-  bloomProgress:  0.0,     // manual override (0–1)
-  autoBloom:      true,    // auto-animate bloom
+  flowerCount: 5,
+  fieldSpacing: 14,
+  growthSpeed: 0.0008,
+  windIntensity: 1.0,
+  bloomProgress: 0.0,     // manual override (0–1)
+  autoBloom: true,    // auto-animate bloom
   restartBloom() {
     flowers.forEach(f => f.restart());
   },
-  hueBase:     0.0,
-  hueTip:      0.04,
-  saturation:  1.0,
-  lightness:   0.45,
-  fresnelPow:  2.8,
-  glow:        0.9,
-  bloomStrength:  bloomPass.strength,
-  bloomRadius:    bloomPass.radius,
+  hueBase: 0.0,
+  hueTip: 0.04,
+  saturation: 1.0,
+  lightness: 0.45,
+  fresnelPow: 2.8,
+  glow: 0.9,
+  bloomStrength: bloomPass.strength,
+  bloomRadius: bloomPass.radius,
   bloomThreshold: bloomPass.threshold,
+  bokehFocus: 89.0,
+  bokehAperture: 0.0006,
+  rawRender: false, // debug: bypass bloom/DOF post-processing entirely
 
   // --- new dashboard-only additions (gemini-code.md) ---
   particleDensity: 400,
@@ -208,9 +334,9 @@ const params = {
    doesn't add any new colour system to the plant itself)
 ============================================================ */
 const PALETTE_PRESETS = {
-  solar:  { hueBase: 0.08, hueTip: 0.15, saturation: 0.9,  lightness: 0.55, sporeColor: 0xffcf9e },
-  neon:   { hueBase: 0.55, hueTip: 0.85, saturation: 1.0,  lightness: 0.55, sporeColor: 0x8affe6 },
-  pastel: { hueBase: 0.0,  hueTip: 0.04, saturation: 1.0,  lightness: 0.45, sporeColor: 0xffcf9e }, // original Lycoris crimson
+  solar: { hueBase: 0.08, hueTip: 0.15, saturation: 0.9, lightness: 0.55, sporeColor: 0xffcf9e },
+  neon: { hueBase: 0.55, hueTip: 0.85, saturation: 1.0, lightness: 0.55, sporeColor: 0x8affe6 },
+  pastel: { hueBase: 0.0, hueTip: 0.04, saturation: 1.0, lightness: 0.45, sporeColor: 0xffcf9e }, // original Lycoris crimson
 };
 
 function applyPalette(name) {
@@ -235,220 +361,414 @@ const glslHSL = /* glsl */`
 `;
 
 /* ============================================================
-   PETAL VERTEX SHADER
-   – pow() tip curl (upward & backward)
-   – sin() lateral crinkle along margins
-   – Analytical normal via partial derivatives
+   MATERIAL FACTORIES (PBR + custom vertex/fragment shader injections)
 ============================================================ */
-const petalVert = /* glsl */`
-  uniform float uLength;
-  uniform float uWaveFreq;
-  uniform float uWaveAmp;
-  uniform float uCurlY;
-  uniform float uCurlZ;
-  uniform float uPhase; // per-petal random offset — organic irregularity
-
-  varying float vT;
-  varying vec3  vWorldNormal;
-  varying vec3  vWorldPos;
-
-  void main(){
-    // t = normalised distance from base (0) to tip (1)
-    float t = clamp(uv.y, 0.0, 1.0);
-    vT = t;
-
-    vec3 pos = position;
-
-    /* lateral crinkle – decays at base & tip for clean attachment.
-       uPhase (unique per petal) breaks perfect mathematical symmetry
-       between petals so tips read as organically irregular rather
-       than identically stamped copies. */
-    float crinkle = sin(pos.y * uWaveFreq + uPhase) * uWaveAmp * sin(t * 3.14159265);
-    pos.x += crinkle;
-
-    /* tip curl – aggressive backward & upward bend */
-    float t3 = pow(t, 3.0);
-    pos.z -= t3 * uCurlZ;
-    pos.y -= t3 * uCurlY;
-
-    /* analytical normal for correct lighting on deformed mesh */
-    float dt = 1.0 / uLength;
-    float dWave = uWaveFreq * cos(position.y*uWaveFreq + uPhase) * uWaveAmp * sin(t*3.14159265)
-                + sin(position.y*uWaveFreq + uPhase) * uWaveAmp * cos(t*3.14159265) * 3.14159265*dt;
-    float dCY = 3.0 * pow(t,2.0) * uCurlY * dt;
-    float dCZ = 3.0 * pow(t,2.0) * uCurlZ * dt;
-    vec3 tX = vec3(1.0, 0.0, 0.0);
-    vec3 tY = vec3(dWave, 1.0-dCY, -dCZ);
-    vec3 nModel = normalize(cross(tX, tY));
-
-    vWorldNormal = normalize(mat3(modelMatrix) * nModel);
-    vWorldPos    = (modelMatrix * vec4(pos, 1.0)).xyz;
-
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
-  }
-`;
-
-/* ============================================================
-   PETAL FRAGMENT SHADER
-   – HSL crimson colour + tip-lightness fade
-   – Fresnel rim-lighting (velvet sheen)
-   – SSS approximation (backlit translucency)
-============================================================ */
-const petalFrag = /* glsl */`
-  ${glslHSL}
-
-  uniform float uHueBase;
-  uniform float uHueTip;
-  uniform float uSat;
-  uniform float uLight;
-  uniform float uGlow;
-  uniform float uFresnelPow;
-  uniform vec3  uCameraPos;
-
-  varying float vT;
-  varying vec3  vWorldNormal;
-  varying vec3  vWorldPos;
-
-  void main(){
-    /* Base colour with tip fade */
-    float t = clamp(vT, 0.0, 1.0);
-    float hue  = mix(uHueBase, uHueTip, t);
-    float lum  = mix(uLight, uLight + (1.0-uLight)*0.65*t, t);
-    vec3 col   = hsl2rgb(vec3(hue, uSat, lum));
-
-    /* Diffuse + back-fill */
-    vec3 N = normalize(vWorldNormal);
-    vec3 L = normalize(vec3(15,40,20) - vWorldPos);
-    float diff = max(dot(N, L), 0.0)*0.7 + 0.3;
-    col *= diff;
-
-    /* Fresnel rim – velvet glow on curved edges */
-    vec3 V = normalize(uCameraPos - vWorldPos);
-    float rim = pow(1.0 - max(dot(N, V), 0.0), uFresnelPow);
-    vec3 rimCol = hsl2rgb(vec3(uHueBase, 1.0, 0.72));
-    col += rim * rimCol * 0.55;
-
-    /* SSS approximation – translucency when backlit */
-    float backScatter = pow(max(dot(-L, V), 0.0), 6.0) * 0.25;
-    vec3 sssCol = hsl2rgb(vec3(uHueTip, 0.9, 0.75));
-    col += backScatter * sssCol;
-
-    /* Tip glow pulse */
-    col += col * t * uGlow * 0.35;
-
-    gl_FragColor = vec4(col, 1.0);
-  }
-`;
-
-/* ============================================================
-   STAMEN / PISTIL VERTEX SHADER (tube – uses tube UVs)
-============================================================ */
-const stamenVert = /* glsl */`
-  varying float vT;
-  varying vec3  vWorldNormal;
-  varying vec3  vWorldPos;
-
-  void main(){
-    vT = uv.x;   // TubeGeometry: u runs along length
-    vWorldNormal = normalize(mat3(modelMatrix) * normal);
-    vWorldPos    = (modelMatrix * vec4(position,1.0)).xyz;
-    gl_Position  = projectionMatrix * modelViewMatrix * vec4(position,1.0);
-  }
-`;
-
-/* Same fragment logic reused for stamens */
-const stamenFrag = petalFrag;
-
-/* ============================================================
-   MATERIAL FACTORIES
-============================================================ */
-function makePetalMat() {
-  return new THREE.ShaderMaterial({
-    vertexShader:   petalVert,
-    fragmentShader: petalFrag,
-    uniforms: {
-      uLength:     { value: params.petalLength || 5.5 },
-      uWaveFreq:   { value: 18.0  },
-      uWaveAmp:    { value: 0.12  },
-      uCurlY:      { value: 1.8   },
-      uCurlZ:      { value: 2.2   },
-      uPhase:      { value: Math.random() * Math.PI * 2 }, // organic irregularity, unique per petal
-      uHueBase:    { value: params.hueBase    },
-      uHueTip:     { value: params.hueTip     },
-      uSat:        { value: params.saturation },
-      uLight:      { value: params.lightness  },
-      uGlow:       { value: params.glow       },
-      uFresnelPow: { value: params.fresnelPow },
-      uCameraPos:  { value: new THREE.Vector3() },
-    },
+function createPhysicalFlowerMaterial(isStamen = false) {
+  const mat = new THREE.MeshPhysicalMaterial({
+    color: 0xffffff, // colored procedurally by HSL gradient inside fragment shader
+    roughness: isStamen ? 0.55 : 0.65,
+    metalness: 0.0,
+    transmission: isStamen ? 0.3 : 0.42, // petals and filaments are translucent
+    thickness: isStamen ? 0.15 : 0.3, // thickness for SSS approximation
+    ior: 1.36,
+    sheen: 1.0,
+    sheenRoughness: 0.5,
+    sheenColor: 0xff3b3b, // red velvet sheen
     side: THREE.DoubleSide,
+    shadowSide: THREE.DoubleSide
   });
+
+  // Share variables with shaders via userData.uniforms
+  mat.userData.uniforms = {
+    uLength: { value: isStamen ? 8.0 : 5.5 },
+    uWaveFreq: { value: isStamen ? 0.0 : 4.0 },
+    uWaveAmp: { value: isStamen ? 0.0 : 0.065 },
+    uCurlY: { value: isStamen ? 0.0 : 0.45 },
+    uCurlZ: { value: isStamen ? 0.0 : 0.65 },
+    uPhase: { value: Math.random() * Math.PI * 2 },
+    uHueBase: { value: params.hueBase },
+    uHueTip: { value: params.hueTip },
+    uSat: { value: params.saturation },
+    uLight: { value: params.lightness },
+  };
+
+  mat.onBeforeCompile = (shader) => {
+    Object.assign(shader.uniforms, mat.userData.uniforms);
+
+    // Inject uniform declarations and varyings in vertex shader
+    shader.vertexShader = `
+      uniform float uLength;
+      uniform float uWaveFreq;
+      uniform float uWaveAmp;
+      uniform float uCurlY;
+      uniform float uCurlZ;
+      uniform float uPhase;
+      varying float vT;
+      varying vec2 vPetalUv;
+    ` + shader.vertexShader;
+
+    // Apply vertex deformations
+    if (!isStamen) {
+      // Petals: geometry already carries full twist+taper+undulation baked in.
+      // We only need to pass vT and vPetalUv to the fragment shader.
+      // A gentle sinusoidal micro-crinkle adds life without fighting the baked shape.
+      shader.vertexShader = shader.vertexShader.replace(
+        '#include <begin_vertex>',
+        `
+        #include <begin_vertex>
+        vT = uv.y;          // ribbon length param (0 = base, 1 = tip)
+        vPetalUv = uv;
+        // Micro crinkle — tiny amplitude so it doesn't override the baked twist
+        float crinkle = sin(uv.y * uWaveFreq + uPhase) * uWaveAmp * 0.35;
+        transformed.y += crinkle;
+        `
+      );
+    } else {
+      // Stamen tubes: extract length progress
+      shader.vertexShader = shader.vertexShader.replace(
+        '#include <begin_vertex>',
+        `
+        #include <begin_vertex>
+        vT = uv.x;
+        `
+      );
+    }
+
+    // Inject fragment shader header: HSL conversion & procedural dew droplet mapping
+    shader.fragmentShader = `
+      uniform float uHueBase;
+      uniform float uHueTip;
+      uniform float uSat;
+      uniform float uLight;
+      varying float vT;
+      varying vec2 vPetalUv;
+
+      vec3 hsl2rgb(vec3 c) {
+        vec3 p = clamp(abs(mod(c.x*6.0+vec3(0,4,2),6.0)-3.0)-1.0, 0.0, 1.0);
+        return c.z + c.y*(p-0.5)*(1.0-abs(2.0*c.z-1.0));
+      }
+
+      vec3 getDropletNormal(vec2 uv, vec3 baseNormal, out float isDroplet) {
+        const int NUM_DROPLETS = 4;
+        vec2 centers[NUM_DROPLETS];
+        centers[0] = vec2(0.35, 0.3);
+        centers[1] = vec2(0.65, 0.55);
+        centers[2] = vec2(0.25, 0.75);
+        centers[3] = vec2(0.55, 0.88);
+
+        float radii[NUM_DROPLETS];
+        radii[0] = 0.055;
+        radii[1] = 0.04;
+        radii[2] = 0.05;
+        radii[3] = 0.038;
+
+        vec3 finalNormal = baseNormal;
+        isDroplet = 0.0;
+        float aspect = 16.0;
+
+        for (int i = 0; i < NUM_DROPLETS; i++) {
+          vec2 dist = uv - centers[i];
+          dist.y *= aspect;
+          float d = length(dist);
+          float r = radii[i];
+          if (d < r) {
+            float nx = dist.x / r;
+            float ny = dist.y / (aspect * r);
+            float nz = sqrt(1.0 - nx*nx - ny*ny);
+            vec3 tangentNormal = normalize(vec3(nx * 1.5, ny * 1.5, nz));
+            finalNormal = tangentNormal;
+            isDroplet = 1.0;
+            break;
+          }
+        }
+        return finalNormal;
+      }
+    ` + shader.fragmentShader;
+
+    // Apply diffuse gradients, veins, normal mappings, and roughness shifts
+    if (!isStamen) {
+      // Petals
+      shader.fragmentShader = shader.fragmentShader.replace(
+        '#include <color_fragment>',
+        `
+        #include <color_fragment>
+
+        float t = clamp(vT, 0.0, 1.0);
+        float hue  = mix(uHueBase, uHueTip, t);
+        float lum  = mix(uLight, uLight + (1.0-uLight)*0.65*t, t);
+        vec3 gradientCol = hsl2rgb(vec3(hue, uSat, lum));
+        diffuseColor.rgb = gradientCol;
+
+        // Micro veins along width/length contour
+        float veinPattern = sin(vPetalUv.x * 65.0 + sin(vPetalUv.y * 8.0) * 1.5) * 0.5 + 0.5;
+        float fineVeinPattern = sin(vPetalUv.x * 165.0) * 0.5 + 0.5;
+        float totalVeins = mix(1.0, 0.85, (veinPattern * 0.75 + fineVeinPattern * 0.25) * (1.0 - pow(abs(vPetalUv.x - 0.5) * 2.0, 4.0)));
+        diffuseColor.rgb *= totalVeins;
+        `
+      );
+
+      shader.fragmentShader = shader.fragmentShader.replace(
+        '#include <normal_fragment_begin>',
+        `
+        #include <normal_fragment_begin>
+
+        float isDropletNorm = 0.0;
+        vec3 dropletNormal = getDropletNormal(vPetalUv, vec3(0.0, 0.0, 1.0), isDropletNorm);
+
+        if (isDropletNorm > 0.5) {
+          // Tangent space conversion
+          vec3 q0 = dFdx( -vViewPosition );
+          vec3 q1 = dFdy( -vViewPosition );
+          vec2 st0 = dFdx( vPetalUv );
+          vec2 st1 = dFdy( vPetalUv );
+
+          vec3 N = normal;
+
+          vec3 tempT = q0 * st1.t - q1 * st0.t;
+          vec3 tempB = -q0 * st1.s + q1 * st0.s;
+
+          vec3 T = normalize( tempT - N * dot( tempT, N ) );
+          vec3 B = normalize( tempB - N * dot( tempB, N ) );
+
+          vec3 perturbedNormal = T * dropletNormal.x + B * dropletNormal.y + N * dropletNormal.z;
+          normal = normalize( perturbedNormal );
+        }
+        `
+      );
+
+      shader.fragmentShader = shader.fragmentShader.replace(
+        '#include <roughnessmap_fragment>',
+        `
+        #include <roughnessmap_fragment>
+        float isDropletRough = 0.0;
+        getDropletNormal(vPetalUv, vec3(0.0, 0.0, 1.0), isDropletRough);
+        if (isDropletRough > 0.5) {
+          roughnessFactor = 0.0; // water is perfectly smooth
+        }
+        `
+      );
+    } else {
+      // Filaments
+      shader.fragmentShader = shader.fragmentShader.replace(
+        '#include <color_fragment>',
+        `
+        #include <color_fragment>
+
+        float t = clamp(vT, 0.0, 1.0);
+        float hue  = mix(uHueBase, uHueTip, t);
+        float lum  = mix(uLight, uLight + (1.0-uLight)*0.65*t, t);
+        vec3 gradientCol = hsl2rgb(vec3(hue, uSat, lum));
+        diffuseColor.rgb = gradientCol;
+        `
+      );
+    }
+  };
+
+  return mat;
+}
+
+function makeAntherMat() {
+  const mat = new THREE.MeshStandardMaterial({
+    color: 0x1a0806, // near-black dark maroon, matching real Lycoris anthers
+    roughness: 0.6,
+    metalness: 0.1,
+    emissive: 0x3a0f08,
+    emissiveIntensity: 0.15, // just a faint warm tint, not a glowing bulb
+  });
+
+  mat.onBeforeCompile = (shader) => {
+    shader.fragmentShader = shader.fragmentShader.replace(
+      '#include <normal_fragment_begin>',
+      `
+      #include <normal_fragment_begin>
+      // High-frequency procedural 3D noise for pollen dusting bumps
+      float pollenNoise = sin(vViewPosition.x * 260.0) * sin(vViewPosition.y * 260.0) * sin(vViewPosition.z * 260.0);
+      normal = normalize(normal + pollenNoise * 0.15 * normal);
+      `
+    );
+  };
+  return mat;
+}
+
+/**
+ * makeAntherGlowMat – vivid pollen-fire emissive material.
+ * Emissive sits well above the bloom threshold so UnrealBloomPass
+ * produces a natural halo without needing any extra light source.
+ */
+function makeAntherGlowMat() {
+  return new THREE.MeshStandardMaterial({
+    color: 0xfff0a0,          // pale warm yellow surface
+    emissive: new THREE.Color(0xff9900),  // hot orange-amber glow
+    emissiveIntensity: 3.2,   // well above bloom threshold (usually 1.0)
+    roughness: 0.18,
+    metalness: 0.05,
+    transparent: true,
+    opacity: 0.92,
+  });
+}
+
+// Module-level registry — populated in buildFloret, consumed in animate()
+const antherGlowCaps = [];
+
+function makePetalMat() {
+  return createPhysicalFlowerMaterial(false);
 }
 
 function makeStamenMat(isAnther = false) {
   if (isAnther) {
-    // Pollen glow (gemini-code.md "Luminescent Centers"): strong warm
-    // emissive so the anther/stigma tips read as bioluminescent and
-    // catch the UnrealBloomPass highlight, without changing their
-    // geometry or placement.
-    return new THREE.MeshStandardMaterial({
-      color:             0x7a3b1e,
-      roughness:         0.6,
-      metalness:         0.05,
-      emissive:          0xffb066,
-      emissiveIntensity: 1.1,
-    });
+    return makeAntherMat();
   }
-  return new THREE.ShaderMaterial({
-    vertexShader:   stamenVert,
-    fragmentShader: stamenFrag,
-    uniforms: {
-      uLength:     { value: 8.0   },
-      uWaveFreq:   { value: 0.0   },
-      uWaveAmp:    { value: 0.0   },
-      uCurlY:      { value: 0.0   },
-      uCurlZ:      { value: 0.0   },
-      uHueBase:    { value: params.hueBase    },
-      uHueTip:     { value: params.hueTip     },
-      uSat:        { value: params.saturation },
-      uLight:      { value: params.lightness  },
-      uGlow:       { value: params.glow       },
-      uFresnelPow: { value: params.fresnelPow },
-      uCameraPos:  { value: new THREE.Vector3() },
-    },
-    side: THREE.DoubleSide,
-  });
+  return createPhysicalFlowerMaterial(true);
 }
 
 /* ============================================================
    GEOMETRY BUILDERS
 ============================================================ */
-const PETAL_LEN = 5.5, PETAL_W = 0.34;
+const PETAL_LEN = 5.5;
 
+/**
+ * buildPetalGeo – parametric twisted ribbon
+ *
+ * Architecture:
+ *  1. A cubic Bézier spine defines the midrib centre-line in local space
+ *     (the petal grows along +Z, drooping gently in Y).
+ *  2. At each spine sample we lay out a tiny cross-section strip of width W(t).
+ *  3. The strip is rotated by an axial twist angle that grows linearly from 0
+ *     at the base to TWIST_TOTAL at the tip → the unmistakable ribbon spiral.
+ *  4. Edge undulation: both margin vertices are perturbed in the strip-normal
+ *     direction with a low-frequency sine, giving the wavy outer edge.
+ *  5. Lanceolate taper: W(t) is very narrow at the base, fullest at ~55 %,
+ *     then tapering to a sharp point.
+ *  6. The geometry's local origin sits 15 % up the spine so the petal pivots
+ *     from inside the ovary rather than the absolute base.
+ */
 function buildPetalGeo() {
-  const g = new THREE.PlaneGeometry(PETAL_W, PETAL_LEN, 10, 32);
-  g.translate(0, PETAL_LEN / 2, 0);
-  return g;
+  const LEN_SEGS = 48; // longitudinal divisions
+  const W_SEGS   = 6;  // cross-section divisions (ribbon, not a broad blade)
+  const TWIST_TOTAL = Math.PI * 1.3;  // 234 ° — visible spiral characteristic
+  const MAX_W    = 0.09;              // maximum half-width in world units
+  const DROOP_Y  = 0.55;              // how much the midrib dips downward at the tip
+  const DROOP_Z  = PETAL_LEN * 0.92; // how far it extends along Z
+
+  const totalVerts = (LEN_SEGS + 1) * (W_SEGS + 1);
+  const positions  = new Float32Array(totalVerts * 3);
+  const uvs        = new Float32Array(totalVerts * 2);
+  const indices    = [];
+
+  // Cubic Bézier helper
+  function bezier3(p0, p1, p2, p3, t) {
+    const u = 1 - t;
+    return [
+      u*u*u*p0[0] + 3*u*u*t*p1[0] + 3*u*t*t*p2[0] + t*t*t*p3[0],
+      u*u*u*p0[1] + 3*u*u*t*p1[1] + 3*u*t*t*p2[1] + t*t*t*p3[1],
+      u*u*u*p0[2] + 3*u*u*t*p1[2] + 3*u*t*t*p2[2] + t*t*t*p3[2],
+    ];
+  }
+  function bezier3Tan(p0, p1, p2, p3, t) {
+    const u = 1 - t;
+    return [
+      3*(u*u*(p1[0]-p0[0]) + 2*u*t*(p2[0]-p1[0]) + t*t*(p3[0]-p2[0])),
+      3*(u*u*(p1[1]-p0[1]) + 2*u*t*(p2[1]-p1[1]) + t*t*(p3[1]-p2[1])),
+      3*(u*u*(p1[2]-p0[2]) + 2*u*t*(p2[2]-p1[2]) + t*t*(p3[2]-p2[2])),
+    ];
+  }
+
+  // Spine control points (local petal space: base at origin, tip along +Z)
+  const B0 = [0,  0,         0          ];
+  const B1 = [0,  DROOP_Y * 0.1, DROOP_Z * 0.35];
+  const B2 = [0,  DROOP_Y * 0.6, DROOP_Z * 0.72];
+  const B3 = [0, -DROOP_Y,       DROOP_Z       ];
+
+  let vi = 0, ui = 0;
+  for (let li = 0; li <= LEN_SEGS; li++) {
+    const t   = li / LEN_SEGS;           // 0 = base … 1 = tip
+    const spine = bezier3(B0, B1, B2, B3, t);
+    const tan   = bezier3Tan(B0, B1, B2, B3, t);
+
+    // Orthonormal frame: tangent, up-ref → bitangent → normal
+    const tLen = Math.sqrt(tan[0]*tan[0] + tan[1]*tan[1] + tan[2]*tan[2]) || 1;
+    const tx = tan[0]/tLen, ty = tan[1]/tLen, tz = tan[2]/tLen;
+
+    // Stable reference vector: use world-X unless tangent is nearly parallel
+    const refX = Math.abs(tx) < 0.9 ? 1 : 0;
+    const refY = Math.abs(tx) < 0.9 ? 0 : 1;
+    // Bitangent = T × ref, then normal = T × B
+    let bx = ty*0 - tz*refY, by = tz*refX - tx*0, bz = tx*refY - ty*refX;
+    let bLen = Math.sqrt(bx*bx+by*by+bz*bz)||1; bx/=bLen; by/=bLen; bz/=bLen;
+    let nx = ty*bz - tz*by, ny = tz*bx - tx*bz, nz = tx*by - ty*bx;
+    let nLen = Math.sqrt(nx*nx+ny*ny+nz*nz)||1; nx/=nLen; ny/=nLen; nz/=nLen;
+
+    // Axial twist angle: linear 0 → TWIST_TOTAL
+    const twistAngle = t * TWIST_TOTAL;
+    const cosA = Math.cos(twistAngle), sinA = Math.sin(twistAngle);
+    // Rotate (b, n) frame around tangent by twistAngle
+    const rbx = bx*cosA - nx*sinA, rby = by*cosA - ny*sinA, rbz = bz*cosA - nz*sinA;
+
+    // Lanceolate width profile
+    const halfW = MAX_W * (0.05 + 0.95 * Math.pow(Math.sin(Math.PI * Math.pow(t, 0.8)), 1.6));
+
+    for (let wi = 0; wi <= W_SEGS; wi++) {
+      const s = wi / W_SEGS;       // 0 = one edge, 1 = other edge
+      const localU = s * 2 - 1;   // -1 … +1
+
+      // Edge undulation: small sinusoidal perturbation in normal direction
+      const undulate = 0.012 * Math.sin(t * Math.PI * 3.5 + localU * Math.PI) * Math.sin(Math.PI * t);
+
+      const px = spine[0] + rbx * localU * halfW + nx * undulate;
+      const py = spine[1] + rby * localU * halfW + ny * undulate;
+      const pz = spine[2] + rbz * localU * halfW + nz * undulate;
+
+      positions[vi*3]   = px;
+      positions[vi*3+1] = py;
+      positions[vi*3+2] = pz;
+      uvs[ui*2]   = s;
+      uvs[ui*2+1] = t;
+      vi++; ui++;
+    }
+  }
+
+  // Build triangle indices
+  for (let li = 0; li < LEN_SEGS; li++) {
+    for (let wi = 0; wi < W_SEGS; wi++) {
+      const a = li * (W_SEGS+1) + wi;
+      const b = a + 1;
+      const c = a + (W_SEGS+1);
+      const d = c + 1;
+      indices.push(a, c, b, b, c, d);
+    }
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geo.setAttribute('uv',       new THREE.BufferAttribute(uvs, 2));
+  geo.setIndex(indices);
+  geo.computeVertexNormals();
+
+  // Pivot: shift so the base sits 15 % back from origin → petal pivots inside ovary
+  geo.translate(0, 0, -PETAL_LEN * 0.15);
+  return geo;
 }
 
-function buildStamenCurve(length, spreadAngle, heightBias) {
-  // Clean outward+upward arc – control points strictly progress away from origin
+function buildStamenCurve(length) {
+  // Fountain arc: starts nearly vertical, sweeps outward, tip curves up
   const pts = [];
-  const N = 14;
+  const N = 20;
   for (let i = 0; i <= N; i++) {
     const t = i / N;
-    pts.push(new THREE.Vector3(
-      length * t * Math.cos(spreadAngle) * (0.6 + 0.4 * t),
-      length * Math.pow(t, 1.6) * (0.5 + heightBias * t),
-      length * t * Math.sin(spreadAngle) * (0.6 + 0.4 * t)
-    ));
+    // X: slow lateral sweep that accelerates — fountain silhouette
+    const x = length * 0.72 * Math.pow(t, 1.4);
+    // Y: rises gently at first then drops slightly at the very tip
+    const y = length * 0.35 * Math.sin(t * Math.PI * 0.62) * (1 - 0.18 * t);
+    // Z: small forward depth
+    const z = length * 0.22 * t * t;
+    pts.push(new THREE.Vector3(x, y, z));
   }
   return new THREE.CatmullRomCurve3(pts);
 }
 
 function buildBractGeo() {
   const s = new THREE.Shape();
-  s.moveTo(0,   0);
+  s.moveTo(0, 0);
   s.lineTo(0.3, 0.8);
   s.lineTo(-0.3, 0.8);
   s.closePath();
@@ -460,60 +780,86 @@ function buildBractGeo() {
    Returns { group, stamenMeshes, petalMeshes, allMats }
 ============================================================ */
 function buildFloret() {
-  const floret   = new THREE.Group();
+  const floret = new THREE.Group();
   const petalGeo = buildPetalGeo();
 
-  const petalMeshes  = [];
+  const petalMeshes = [];
   const stamenMeshes = [];
-  const allMats      = [];
+  const allMats = [];
 
-  /* 6 tepals (petals) */
+  /* 6 tepals (petals)
+   *
+   * All petals emerge from essentially the same point (the ovary),
+   * then fan outward purely via rotation.y.
+   *
+   * Natural jitter on the inter-petal angle gives the asymmetric
+   * 58-63° spacing real lilies show.
+   */
+  const baseAngles = [];
+  let acc = 0;
   for (let j = 0; j < 6; j++) {
-    const a = (j / 6) * Math.PI * 2;
+    baseAngles.push(acc);
+    // 60° nominal + ±5° random jitter per step
+    acc += (Math.PI / 3) + (Math.random() - 0.5) * 0.18;
+  }
+
+  for (let j = 0; j < 6; j++) {
+    const a = baseAngles[j];
     const mat = makePetalMat();
     allMats.push(mat);
     const mesh = new THREE.Mesh(petalGeo, mat);
 
-    mesh.position.set(Math.cos(a) * 0.1, 0, Math.sin(a) * 0.1);
+    // All petals emerge from inside the ovary — no radial offset
+    mesh.position.set(0, 0, 0);
     mesh.rotation.order = "YXZ";
-    mesh.rotation.x =  Math.PI * 0.5;   // lay flat, shader curls it up
-    mesh.rotation.y = -a;
-    mesh.rotation.z =  0.3 + (Math.random() - 0.5) * 0.06;
+    // Y: spin petal around the vertical axis to fan the 6 ribbons
+    mesh.rotation.y = a;
+    // X: gentle downward tilt so petals sweep outward+down before twisting back
+    mesh.rotation.x = -Math.PI * 0.18 + (Math.random() - 0.5) * 0.06;
+    // Z: very small roll, keeps petals from all lying in one plane
+    mesh.rotation.z = (Math.random() - 0.5) * 0.12;
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
 
     floret.add(mesh);
     petalMeshes.push(mesh);
   }
 
   /* Ovary (tiny green sphere at base) */
-  floret.add(new THREE.Mesh(
+  const ovary = new THREE.Mesh(
     new THREE.SphereGeometry(0.22, 8, 8),
     new THREE.MeshStandardMaterial({ color: 0x3a7a30, roughness: 0.8 })
-  ));
+  );
+  ovary.castShadow = true;
+  ovary.receiveShadow = true;
+  floret.add(ovary);
 
   /* 6 Stamens + 1 Pistil (asymmetric, 15% longer) */
   const filamentGeo = (len, thick) => {
-    const curve = buildStamenCurve(len, 0, 0.4);
-    return new THREE.TubeGeometry(curve, 22, thick, 5, false);
+    const curve = buildStamenCurve(len);
+    return new THREE.TubeGeometry(curve, 64, thick, 10, false);
   };
 
-  const antherGeo = new THREE.CapsuleGeometry(0.055, 0.18, 4, 6);
+  const antherGeo = new THREE.CapsuleGeometry(0.032, 0.1, 6, 10);
   antherGeo.rotateZ(Math.PI / 2);
 
   for (let j = 0; j < 7; j++) {
-    const isPistil  = (j === 6);
-    const len       = isPistil ? PETAL_LEN * 1.9 : PETAL_LEN * 1.62;
-    const thick     = isPistil ? 0.038 : 0.042;
-    const sAngle    = isPistil
+    const isPistil = (j === 6);
+    const len = isPistil ? PETAL_LEN * 2.45 : PETAL_LEN * 2.2;
+    const thick = isPistil ? 0.015 : 0.012;
+    const sAngle = isPistil
       ? (5.5 / 7) * Math.PI * 2 + 0.22   // offset from stamens
       : (j / 6) * Math.PI * 2 + 0.08;
 
     const mat = makeStamenMat(false);
     allMats.push(mat);
 
-    const curve   = buildStamenCurve(len, 0, 0.38 + (isPistil ? 0.12 : 0));
-    const tubGeo  = new THREE.TubeGeometry(curve, 22, thick, 5, false);
-    const stamen  = new THREE.Mesh(tubGeo, mat);
-    stamen.name   = isPistil ? "pistil" : "stamen";
+    const curve = buildStamenCurve(len);
+    const tubGeo = new THREE.TubeGeometry(curve, 64, thick, 10, false);
+    const stamen = new THREE.Mesh(tubGeo, mat);
+    stamen.name = isPistil ? "pistil" : "stamen";
+    stamen.castShadow = true;
+    stamen.receiveShadow = true;
 
     stamen.rotation.order = "YXZ";
     stamen.rotation.y = -sAngle;
@@ -523,14 +869,52 @@ function buildFloret() {
     stamenMeshes.push(stamen);
 
     /* Anther / Stigma at tip */
-    const tipPt   = curve.getPoint(1);
+    const tipPt = curve.getPoint(1);
     const tipMesh = new THREE.Mesh(
       isPistil ? new THREE.SphereGeometry(0.09, 6, 6) : antherGeo.clone(),
       makeStamenMat(true)
     );
-    tipMesh.position.copy(stamen.localToWorld(tipPt.clone()));
-    // Place in world then re-parent to stamen group
+    tipMesh.castShadow = true;
+    tipMesh.receiveShadow = true;
     tipMesh.position.copy(tipPt);
+
+    if (!isPistil) {
+      // Orient the anther's long axis to the filament's actual tangent at
+      // the tip (not a fixed static rotation) so it presents its round
+      // profile to the viewer instead of sitting edge-on like a flat chip.
+      const tipTangent = curve.getTangent(1).normalize();
+      const bakedAxis = new THREE.Vector3(1, 0, 0); // matches antherGeo.rotateZ(PI/2) above
+      tipMesh.quaternion.setFromUnitVectors(bakedAxis, tipTangent);
+
+      /* ── Anther tip glow caps ────────────────────────────────────────
+       * The CapsuleGeometry lobes sit at ±halfLength along its baked X
+       * axis (after rotateZ(PI/2) the long axis == filament tangent).
+       * We add one tiny emissive sphere at each lobe end so that the
+       * bloom pass halos just the tips, not the whole capsule body.
+       *
+       * Capsule: radius 0.032, length 0.1 → half-length = 0.05
+       * Sphere offset from capsule centre along tipTangent: ±(0.05 + r)
+       */
+      const capR   = 0.028;                                    // glow sphere radius
+      const offset = (0.05 + capR * 0.6);                     // capsule half-len + sink in slightly
+      const capGeo = new THREE.SphereGeometry(capR, 8, 8);
+
+      [-1, 1].forEach(sign => {
+        const glowMat  = makeAntherGlowMat();                  // unique mat per cap for independent pulse
+        const capMesh  = new THREE.Mesh(capGeo, glowMat);
+
+        // Offset along the filament tangent (which is now tipMesh's local X
+        // after setFromUnitVectors aligned it)
+        capMesh.position.copy(tipTangent).multiplyScalar(sign * offset);
+
+        // Store with a random phase so the 42 caps don't all pulse in sync
+        capMesh.userData.glowPhase = Math.random() * Math.PI * 2;
+
+        tipMesh.add(capMesh);
+        antherGlowCaps.push(capMesh);
+      });
+    }
+
     stamen.add(tipMesh);
   }
 
@@ -541,7 +925,7 @@ function buildFloret() {
    FLOWER FACTORY  (full plant: bulb + scape + umbel)
 ============================================================ */
 function createFlower(offset, delay, heightScale) {
-  const root      = new THREE.Group();
+  const root = new THREE.Group();
   root.position.copy(offset);
 
   /* --- Underground Bulb --- */
@@ -553,6 +937,8 @@ function createFlower(offset, delay, heightScale) {
   );
   bulbMesh.scale.set(1.05, 0.75, 1.05);
   bulbMesh.position.y = 0.4;
+  bulbMesh.castShadow = true;
+  bulbMesh.receiveShadow = true;
   root.add(bulbMesh);
 
   /* --- Scape (leafless green stem) --- */
@@ -571,17 +957,57 @@ function createFlower(offset, delay, heightScale) {
     ));
   }
   const stemCurve = new THREE.CatmullRomCurve3(stemPts);
-  const stemMesh  = new THREE.Mesh(
+
+  // Waxy cuticle stem physical material with vertical longitudinal channels/ridges
+  const stemMat = new THREE.MeshPhysicalMaterial({
+    color: 0x184c26, // waxy dark green
+    roughness: 0.55,
+    metalness: 0.05,
+    clearcoat: 0.4, // waxy surface clearcoat
+    clearcoatRoughness: 0.45,
+    transmission: 0.16, // waxy translucency
+    thickness: 0.35,
+    ior: 1.38,
+  });
+
+  stemMat.onBeforeCompile = (shader) => {
+    shader.vertexShader = `
+      varying vec2 vStemUv;
+    ` + shader.vertexShader;
+
+    shader.vertexShader = shader.vertexShader.replace(
+      '#include <begin_vertex>',
+      `
+      #include <begin_vertex>
+      vStemUv = uv;
+      `
+    );
+
+    shader.fragmentShader = `
+      varying vec2 vStemUv;
+    ` + shader.fragmentShader;
+
+    shader.fragmentShader = shader.fragmentShader.replace(
+      '#include <normal_fragment_begin>',
+      `
+      #include <normal_fragment_begin>
+      // 6 longitudinal ridges along the stem
+      float stemRidges = sin(vStemUv.x * 6.0 * 3.14159 * 2.0) * 0.06;
+      normal = normalize(normal + vec3(stemRidges * cos(vStemUv.x * 6.0 * 3.14159 * 2.0), 0.0, stemRidges * sin(vStemUv.x * 6.0 * 3.14159 * 2.0)));
+      `
+    );
+  };
+
+  const stemMesh = new THREE.Mesh(
     new THREE.TubeGeometry(stemCurve, 40, 0.33, 6, false),
-    new THREE.MeshStandardMaterial({
-      color: 0x2e8b50, roughness: 0.62,
-      emissive: 0x0a3d1c, emissiveIntensity: 0.3
-    })
+    stemMat
   );
+  stemMesh.castShadow = true;
+  stemMesh.receiveShadow = true;
   root.add(stemMesh);
 
   /* --- Head Group (umbrella node at stem apex) --- */
-  const headGroup    = new THREE.Group();
+  const headGroup = new THREE.Group();
   headGroup.position.set(stemPts[24].x, stemH, stemPts[24].z);
   root.add(headGroup);
 
@@ -590,6 +1016,8 @@ function createFlower(offset, delay, heightScale) {
     new THREE.SphereGeometry(0.45, 8, 8),
     new THREE.MeshStandardMaterial({ color: 0x2e8b50, roughness: 0.8 })
   );
+  receptacle.castShadow = true;
+  receptacle.receiveShadow = true;
   headGroup.add(receptacle);
 
   /* Papery bracts at the junction */
@@ -598,19 +1026,21 @@ function createFlower(offset, delay, heightScale) {
   });
   const bractGeo = buildBractGeo();
   for (let b = 0; b < 6; b++) {
-    const ba  = (b / 6) * Math.PI * 2;
+    const ba = (b / 6) * Math.PI * 2;
     const brm = new THREE.Mesh(bractGeo, bractMat);
     brm.position.set(Math.cos(ba) * 0.55, 0, Math.sin(ba) * 0.55);
     brm.rotation.y = -ba;
-    brm.rotation.x =  0.35;
+    brm.rotation.x = 0.35;
+    brm.castShadow = true;
+    brm.receiveShadow = true;
     headGroup.add(brm);
   }
 
   /* --- Pedicels + Florets --- */
-  const FLORET_COUNT  = 6;
-  const CLUSTER_R     = 3.2;
+  const FLORET_COUNT = 6;
+  const CLUSTER_R = 3.2;
   const pedicelsGroup = new THREE.Group();
-  const floretsGroup  = new THREE.Group();
+  const floretsGroup = new THREE.Group();
   headGroup.add(pedicelsGroup, floretsGroup);
 
   const pedicelMat = new THREE.MeshStandardMaterial({
@@ -621,9 +1051,12 @@ function createFlower(offset, delay, heightScale) {
 
   for (let i = 0; i < FLORET_COUNT; i++) {
     const angle = (i / FLORET_COUNT) * Math.PI * 2 + (Math.random() - 0.5) * 0.06;
-    const fx    = CLUSTER_R * Math.cos(angle);
-    const fz    = CLUSTER_R * Math.sin(angle);
-    const fy    = CLUSTER_R * 0.22;
+    const fx = CLUSTER_R * Math.cos(angle);
+    const fz = CLUSTER_R * Math.sin(angle);
+    // ±20° height variation: some florets droop, some rise — nature is not flat
+    const fyBase = CLUSTER_R * 0.22;
+    const fyJitter = CLUSTER_R * 0.38 * (Math.random() - 0.5); // ±0.19 * R
+    const fy = fyBase + fyJitter;
 
     /* Pedicel tube */
     const pedCurve = new THREE.CatmullRomCurve3([
@@ -631,16 +1064,22 @@ function createFlower(offset, delay, heightScale) {
       new THREE.Vector3(fx * 0.4, fy * 0.15, fz * 0.4),
       new THREE.Vector3(fx, fy, fz),
     ]);
-    pedicelsGroup.add(new THREE.Mesh(
+    const pedMesh = new THREE.Mesh(
       new THREE.TubeGeometry(pedCurve, 12, 0.07, 4, false), pedicelMat
-    ));
+    );
+    pedMesh.castShadow = true;
+    pedMesh.receiveShadow = true;
+    pedicelsGroup.add(pedMesh);
 
     /* Floret sub-group */
     const { group: floret, stamenMeshes, petalMeshes, allMats } = buildFloret();
     floret.position.set(fx, fy, fz);
     floret.rotation.order = "YXZ";
     floret.rotation.y = -angle;
-    floret.rotation.z = Math.PI / 6 + (Math.random() - 0.5) * 0.04;
+    // Gentle droop: tilt each floret outward from the umbel centre
+    // so the stamens point away from the stem rather than straight up.
+    floret.rotation.x = 0.28 + (Math.random() - 0.5) * 0.12;
+    floret.rotation.z = 0;
     floretsGroup.add(floret);
 
     floretData.push({ floret, stamenMeshes, petalMeshes, allMats, angle, fx, fy, fz });
@@ -649,10 +1088,10 @@ function createFlower(offset, delay, heightScale) {
   /* ============================================================
      STATE MACHINE VARIABLES
   ============================================================ */
-  let _bloomProgress  = 0.0;
-  let _growing        = true;
-  let _stemLag        = 0.0;   // aerodynamic lag accumulator
-  let _stamenLag      = 0.0;
+  let _bloomProgress = 0.0;
+  let _growing = true;
+  let _stemLag = 0.0;   // aerodynamic lag accumulator
+  let _stamenLag = 0.0;
 
   /* store rest positions for lag math */
   const restHeadY = stemH;
@@ -662,7 +1101,7 @@ function createFlower(offset, delay, heightScale) {
   ============================================================ */
   function restart() {
     _bloomProgress = 0.0;
-    _growing       = true;
+    _growing = true;
     stemMesh.scale.set(1, 0.001, 1);
     headGroup.visible = false;
   }
@@ -713,9 +1152,9 @@ function createFlower(offset, delay, heightScale) {
     const curlFactor = bloom;
     floretData.forEach(({ allMats }) => {
       allMats.forEach(mat => {
-        if (mat.uniforms && mat.uniforms.uCurlY) {
-          mat.uniforms.uCurlY.value = curlFactor * 1.8;
-          mat.uniforms.uCurlZ.value = curlFactor * 2.2;
+        if (mat.userData && mat.userData.uniforms && mat.userData.uniforms.uCurlY) {
+          mat.userData.uniforms.uCurlY.value = curlFactor * 0.45;
+          mat.userData.uniforms.uCurlZ.value = curlFactor * 0.65;
         }
       });
     });
@@ -731,11 +1170,11 @@ function createFlower(offset, delay, heightScale) {
 
     /* Aerodynamic inertia – lag the accumulation */
     const lagSpeed = 0.08;
-    _stemLag   += (baseSX - _stemLag)   * lagSpeed;
+    _stemLag += (baseSX - _stemLag) * lagSpeed;
     _stamenLag += (baseSZ - _stamenLag) * lagSpeed;
 
-    root.rotation.x  = _stemLag;
-    root.rotation.z  = _stamenLag * 0.7;
+    root.rotation.x = _stemLag;
+    root.rotation.z = _stamenLag * 0.7;
 
     /* Head nod lag (heavier load lags more) */
     const headSX = baseNoise2D(time * 0.22 + 1.1, offset.x * 0.07) * 0.045 * wi * bloom;
@@ -758,29 +1197,24 @@ function createFlower(offset, delay, heightScale) {
 
     /* Auto-rotate slowly */
     if (params.autoRotate) headGroup.rotation.y = time * 0.04;
-
-    /* Update camera position in all shader mats */
-    const camPos = camera.position;
-    floretData.forEach(({ allMats }) => {
-      allMats.forEach(mat => {
-        if (mat.uniforms && mat.uniforms.uCameraPos) {
-          mat.uniforms.uCameraPos.value.copy(camPos);
-        }
-      });
-    });
   }
 
   /* Update colours from GUI */
   function setUniforms() {
     floretData.forEach(({ allMats }) => {
       allMats.forEach(mat => {
-        if (!mat.uniforms) return;
-        mat.uniforms.uHueBase.value    = params.hueBase;
-        mat.uniforms.uHueTip.value     = params.hueTip;
-        mat.uniforms.uSat.value        = params.saturation;
-        mat.uniforms.uLight.value      = params.lightness;
-        mat.uniforms.uGlow.value       = params.glow;
-        mat.uniforms.uFresnelPow.value = params.fresnelPow;
+        if (mat.userData && mat.userData.uniforms) {
+          mat.userData.uniforms.uHueBase.value = params.hueBase;
+          mat.userData.uniforms.uHueTip.value = params.hueTip;
+          mat.userData.uniforms.uSat.value = params.saturation;
+          mat.userData.uniforms.uLight.value = params.lightness;
+        }
+
+        // Dynamically map glow and fresnel settings to physical sheen parameters
+        if (mat.isMeshPhysicalMaterial) {
+          mat.sheen = params.glow * 1.25;
+          mat.sheenRoughness = THREE.MathUtils.clamp(1.0 - (params.fresnelPow / 8.0), 0.1, 1.0);
+        }
       });
     });
   }
@@ -800,10 +1234,10 @@ function rebuildField() {
   flowers = [];
   const goldenAngle = Math.PI * (3 - Math.sqrt(5));
   for (let i = 0; i < params.flowerCount; i++) {
-    const angle  = i * goldenAngle;
-    const r      = params.fieldSpacing * Math.sqrt(i);
+    const angle = i * goldenAngle;
+    const r = params.fieldSpacing * Math.sqrt(i);
     const offset = new THREE.Vector3(r * Math.cos(angle), 0, r * Math.sin(angle));
-    const f      = createFlower(offset, i * 0.12, 0.85 + Math.random() * 0.3);
+    const f = createFlower(offset, i * 0.12, 0.85 + Math.random() * 0.3);
     fieldGroup.add(f.group);
     flowers.push(f);
   }
@@ -825,28 +1259,35 @@ fField.add(params, "fieldSpacing", 6, 30, 1).name("spacing").onFinishChange(rebu
 fField.open();
 
 const fAnim = gui.addFolder("Growth & Wind");
-fAnim.add(params, "growthSpeed",   0.0001, 0.004, 0.0001).name("grow speed");
-fAnim.add(params, "windIntensity", 0,      3,     0.05).name("wind intensity");
-fAnim.add(params, "bloomProgress", 0,      1,     0.01).name("bloom progress");
+fAnim.add(params, "growthSpeed", 0.0001, 0.004, 0.0001).name("grow speed");
+fAnim.add(params, "windIntensity", 0, 3, 0.05).name("wind intensity");
+fAnim.add(params, "bloomProgress", 0, 1, 0.01).name("bloom progress");
 fAnim.add(params, "autoBloom").name("auto bloom");
 fAnim.add(params, "restartBloom").name("↺ restart bloom");
 fAnim.open();
 
 const fShape = gui.addFolder("Petals & Shape");
 fShape.add(params, "fresnelPow", 0.5, 8, 0.1).name("fresnel power").onChange(updateColors);
-fShape.add(params, "glow",       0,   3, 0.05).onChange(updateColors);
+fShape.add(params, "glow", 0, 3, 0.05).onChange(updateColors);
 
 const fColor = gui.addFolder("Colour");
-fColor.add(params, "hueBase",    0, 1, 0.001).name("hue base").onChange(updateColors);
-fColor.add(params, "hueTip",     0, 1, 0.001).name("hue tip").onChange(updateColors);
+fColor.add(params, "hueBase", 0, 1, 0.001).name("hue base").onChange(updateColors);
+fColor.add(params, "hueTip", 0, 1, 0.001).name("hue tip").onChange(updateColors);
 fColor.add(params, "saturation", 0, 1, 0.01).onChange(updateColors);
-fColor.add(params, "lightness",  0, 1, 0.01).onChange(updateColors);
+fColor.add(params, "lightness", 0, 1, 0.01).onChange(updateColors);
 fColor.open();
 
 const fBloom = gui.addFolder("Bloom (postFX)");
-fBloom.add(bloomPass, "strength",  0, 2,   0.01).name("strength");
-fBloom.add(bloomPass, "radius",    0, 1,   0.01).name("radius");
+fBloom.add(bloomPass, "strength", 0, 2, 0.01).name("strength");
+fBloom.add(bloomPass, "radius", 0, 1, 0.01).name("radius");
 fBloom.add(bloomPass, "threshold", 0, 0.5, 0.01).name("threshold");
+
+const fBokeh = gui.addFolder("Bokeh (DOF)");
+fBokeh.add(bokehPass.uniforms["focus"], "value", 40, 150, 1).name("focus distance");
+fBokeh.add(bokehPass.uniforms["aperture"], "value", 0, 0.005, 0.0001).name("aperture size");
+fBokeh.add(bokehPass.uniforms["maxblur"], "value", 0, 0.05, 0.001).name("max blur");
+
+gui.add(params, "rawRender").name("⚠ debug: raw render (no FX)");
 
 /* ============================================================
    ANIMATION LOOP
@@ -855,14 +1296,28 @@ const clock = new THREE.Clock();
 
 function animate() {
   requestAnimationFrame(animate);
-  const dt   = clock.getDelta() * 60;
+  const dt = clock.getDelta() * 60;
   const time = clock.elapsedTime;
 
   flowers.forEach(f => f.update(dt, time));
   updateSpores(dt / 60, time); // dt/60 = real seconds elapsed this frame
 
+  /* ── Anther glow pulse ────────────────────────────────────────────
+   * Each cap breathes independently (offset phase) between a dim base
+   * and a bright peak, creating the impression of pollen bioluminescence.
+   */
+  antherGlowCaps.forEach(cap => {
+    const pulse = 0.5 + 0.5 * Math.sin(time * 1.8 + cap.userData.glowPhase);
+    // Range: 2.0 (dim) → 4.8 (bright) — always above bloom threshold
+    cap.material.emissiveIntensity = 2.0 + pulse * 2.8;
+  });
+
   controls.update();
-  composer.render();
+  if (params.rawRender) {
+    renderer.render(scene, camera);
+  } else {
+    composer.render();
+  }
 }
 animate();
 
@@ -872,20 +1327,22 @@ animate();
    Does not replace or remove the dat.gui panel.
 ============================================================ */
 const baseGrowthSpeed = params.growthSpeed; // remember default so the
-                                             // dashboard slider can act
-                                             // as a clean multiplier
+// dashboard slider can act
+// as a clean multiplier
 
 const $ = (id) => document.getElementById(id);
 const elFlowers = $("ctrlFlowers"), valFlowers = $("valFlowers");
-const elSpeed   = $("ctrlSpeed"),   valSpeed   = $("valSpeed");
+const elSpeed = $("ctrlSpeed"), valSpeed = $("valSpeed");
 const elDensity = $("ctrlDensity"), valDensity = $("valDensity");
+const elFocus = $("ctrlFocus"), valFocus = $("valFocus");
+const elAperture = $("ctrlAperture"), valAperture = $("valAperture");
 const elPalette = $("ctrlPalette");
-const elPlay    = $("btnPlay");
-const elRewind  = $("btnRewind");
-const elExport  = $("btnExport");
-const panel     = $("bloomPanel");
-const tab       = $("bloomTab");
-const closeBtn  = $("bloomClose");
+const elPlay = $("btnPlay");
+const elRewind = $("btnRewind");
+const elExport = $("btnExport");
+const panel = $("bloomPanel");
+const tab = $("bloomTab");
+const closeBtn = $("bloomClose");
 
 if (elFlowers) {
   elFlowers.addEventListener("change", (e) => {
@@ -913,6 +1370,25 @@ if (elDensity) {
   });
 }
 
+if (elFocus) {
+  elFocus.addEventListener("input", (e) => {
+    const val = parseFloat(e.target.value);
+    params.bokehFocus = val;
+    bokehPass.uniforms["focus"].value = val;
+    valFocus.textContent = val.toFixed(0) + "m";
+  });
+}
+
+if (elAperture) {
+  elAperture.addEventListener("input", (e) => {
+    const val = parseFloat(e.target.value);
+    const apVal = val * 0.0001;
+    params.bokehAperture = apVal;
+    bokehPass.uniforms["aperture"].value = apVal;
+    valAperture.textContent = val.toFixed(0);
+  });
+}
+
 if (elPalette) {
   elPalette.addEventListener("change", (e) => applyPalette(e.target.value));
 }
@@ -934,9 +1410,9 @@ if (elRewind) {
 
 if (elExport) {
   elExport.addEventListener("click", () => {
-    // The dashboard is a separate HTML overlay (never drawn onto the
-    // WebGL canvas), so reading back the canvas pixels captures the
-    // artwork cleanly with no UI baked in.
+    // Force composer rendering immediately prior to canvas pixels readback
+    // to capture full bloom + bokeh effects correctly.
+    composer.render();
     const link = document.createElement("a");
     link.download = `lycoris-${Date.now()}.png`;
     link.href = renderer.domElement.toDataURL("image/png");
