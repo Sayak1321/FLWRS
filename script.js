@@ -163,7 +163,7 @@ composer.addPass(bloomPass);
 // Cinematic Bokeh Depth of Field
 const bokehPass = new BokehPass(scene, camera, {
   focus: 89.0,
-  aperture: 0.0006, // extremely subtle aperture for realistic macro bokeh
+  aperture: 0.0003, // extremely subtle aperture for realistic macro bokeh
   maxblur: 0.012,
   width: window.innerWidth,
   height: window.innerHeight
@@ -320,12 +320,13 @@ const params = {
   bloomRadius: bloomPass.radius,
   bloomThreshold: bloomPass.threshold,
   bokehFocus: 89.0,
-  bokehAperture: 0.0006,
+  bokehAperture: 0.0003,
   rawRender: false, // debug: bypass bloom/DOF post-processing entirely
 
   // --- new dashboard-only additions (gemini-code.md) ---
   particleDensity: 400,
   palette: "pastel",
+  autofocus: true,
 };
 
 /* ============================================================
@@ -348,6 +349,21 @@ function applyPalette(name) {
   params.lightness = p.lightness;
   sporeMat.color.setHex(p.sporeColor);
   updateColors();
+
+  // Sync to dashboard sliders if initialized
+  const elHueBase = document.getElementById("ctrlHueBase");
+  const valHueBase = document.getElementById("valHueBase");
+  const elHueTip = document.getElementById("ctrlHueTip");
+  const valHueTip = document.getElementById("valHueTip");
+  const elSaturation = document.getElementById("ctrlSaturation");
+  const valSaturation = document.getElementById("valSaturation");
+  const elLightness = document.getElementById("ctrlLightness");
+  const valLightness = document.getElementById("valLightness");
+
+  if (elHueBase) { elHueBase.value = p.hueBase; valHueBase.textContent = p.hueBase.toFixed(3); }
+  if (elHueTip) { elHueTip.value = p.hueTip; valHueTip.textContent = p.hueTip.toFixed(3); }
+  if (elSaturation) { elSaturation.value = p.saturation; valSaturation.textContent = p.saturation.toFixed(2); }
+  if (elLightness) { elLightness.value = p.lightness; valLightness.textContent = p.lightness.toFixed(2); }
 }
 
 /* ============================================================
@@ -1248,48 +1264,6 @@ function updateColors() { flowers.forEach(f => f.setUniforms()); }
 rebuildField();
 
 /* ============================================================
-   GUI
-============================================================ */
-const gui = new dat.GUI();
-gui.width = 280;
-
-const fField = gui.addFolder("Field");
-fField.add(params, "flowerCount", 1, 20, 1).name("count").onFinishChange(rebuildField);
-fField.add(params, "fieldSpacing", 6, 30, 1).name("spacing").onFinishChange(rebuildField);
-fField.open();
-
-const fAnim = gui.addFolder("Growth & Wind");
-fAnim.add(params, "growthSpeed", 0.0001, 0.004, 0.0001).name("grow speed");
-fAnim.add(params, "windIntensity", 0, 3, 0.05).name("wind intensity");
-fAnim.add(params, "bloomProgress", 0, 1, 0.01).name("bloom progress");
-fAnim.add(params, "autoBloom").name("auto bloom");
-fAnim.add(params, "restartBloom").name("↺ restart bloom");
-fAnim.open();
-
-const fShape = gui.addFolder("Petals & Shape");
-fShape.add(params, "fresnelPow", 0.5, 8, 0.1).name("fresnel power").onChange(updateColors);
-fShape.add(params, "glow", 0, 3, 0.05).onChange(updateColors);
-
-const fColor = gui.addFolder("Colour");
-fColor.add(params, "hueBase", 0, 1, 0.001).name("hue base").onChange(updateColors);
-fColor.add(params, "hueTip", 0, 1, 0.001).name("hue tip").onChange(updateColors);
-fColor.add(params, "saturation", 0, 1, 0.01).onChange(updateColors);
-fColor.add(params, "lightness", 0, 1, 0.01).onChange(updateColors);
-fColor.open();
-
-const fBloom = gui.addFolder("Bloom (postFX)");
-fBloom.add(bloomPass, "strength", 0, 2, 0.01).name("strength");
-fBloom.add(bloomPass, "radius", 0, 1, 0.01).name("radius");
-fBloom.add(bloomPass, "threshold", 0, 0.5, 0.01).name("threshold");
-
-const fBokeh = gui.addFolder("Bokeh (DOF)");
-fBokeh.add(bokehPass.uniforms["focus"], "value", 40, 150, 1).name("focus distance");
-fBokeh.add(bokehPass.uniforms["aperture"], "value", 0, 0.005, 0.0001).name("aperture size");
-fBokeh.add(bokehPass.uniforms["maxblur"], "value", 0, 0.05, 0.001).name("max blur");
-
-gui.add(params, "rawRender").name("⚠ debug: raw render (no FX)");
-
-/* ============================================================
    ANIMATION LOOP
 ============================================================ */
 const clock = new THREE.Clock();
@@ -1312,6 +1286,18 @@ function animate() {
     cap.material.emissiveIntensity = 2.0 + pulse * 2.8;
   });
 
+  // Autofocus camera to controls target distance
+  if (params.autofocus) {
+    const dist = camera.position.distanceTo(controls.target);
+    params.bokehFocus = dist;
+    bokehPass.uniforms["focus"].value = dist;
+
+    const elFocus = document.getElementById("ctrlFocus");
+    const valFocus = document.getElementById("valFocus");
+    if (elFocus) elFocus.value = dist;
+    if (valFocus) valFocus.textContent = dist.toFixed(0) + "m";
+  }
+
   controls.update();
   if (params.rawRender) {
     renderer.render(scene, camera);
@@ -1322,27 +1308,44 @@ function animate() {
 animate();
 
 /* ============================================================
-   GLASS DASHBOARD WIRING  (additive — mirrors/extends the dat.gui
-   controls above through the new HTML overlay from index.html.
-   Does not replace or remove the dat.gui panel.
+   GLASS DASHBOARD WIRING
 ============================================================ */
-const baseGrowthSpeed = params.growthSpeed; // remember default so the
-// dashboard slider can act
-// as a clean multiplier
+const baseGrowthSpeed = params.growthSpeed;
 
 const $ = (id) => document.getElementById(id);
 const elFlowers = $("ctrlFlowers"), valFlowers = $("valFlowers");
+const elSpacing = $("ctrlSpacing"), valSpacing = $("valSpacing");
 const elSpeed = $("ctrlSpeed"), valSpeed = $("valSpeed");
+const elBloomProgress = $("ctrlBloomProgress"), valBloomProgress = $("valBloomProgress");
+const elWind = $("ctrlWind"), valWind = $("valWind");
+const elAutoBloom = $("ctrlAutoBloom");
+
+const elPalette = $("ctrlPalette");
+const elHueBase = $("ctrlHueBase"), valHueBase = $("valHueBase");
+const elHueTip = $("ctrlHueTip"), valHueTip = $("valHueTip");
+const elSaturation = $("ctrlSaturation"), valSaturation = $("valSaturation");
+const elLightness = $("ctrlLightness"), valLightness = $("valLightness");
+const elFresnel = $("ctrlFresnel"), valFresnel = $("valFresnel");
+const elGlow = $("ctrlGlow"), valGlow = $("valGlow");
+
 const elDensity = $("ctrlDensity"), valDensity = $("valDensity");
 const elFocus = $("ctrlFocus"), valFocus = $("valFocus");
 const elAperture = $("ctrlAperture"), valAperture = $("valAperture");
-const elPalette = $("ctrlPalette");
+const elMaxBlur = $("ctrlMaxBlur"), valMaxBlur = $("valMaxBlur");
+const elBloomStrength = $("ctrlBloomStrength"), valBloomStrength = $("valBloomStrength");
+const elBloomRadius = $("ctrlBloomRadius"), valBloomRadius = $("valBloomRadius");
+const elBloomThreshold = $("ctrlBloomThreshold"), valBloomThreshold = $("valBloomThreshold");
+const elRawRender = $("ctrlRawRender");
+const elAutofocus = $("ctrlAutofocus");
+
 const elPlay = $("btnPlay");
 const elRewind = $("btnRewind");
 const elExport = $("btnExport");
 const panel = $("bloomPanel");
 const tab = $("bloomTab");
 const closeBtn = $("bloomClose");
+
+
 
 if (elFlowers) {
   elFlowers.addEventListener("change", (e) => {
@@ -1354,11 +1357,105 @@ if (elFlowers) {
   });
 }
 
+if (elSpacing) {
+  elSpacing.addEventListener("change", (e) => {
+    params.fieldSpacing = parseInt(e.target.value, 10);
+    rebuildField();
+  });
+  elSpacing.addEventListener("input", (e) => {
+    valSpacing.textContent = e.target.value + "m";
+  });
+}
+
 if (elSpeed) {
   elSpeed.addEventListener("input", (e) => {
     const mult = parseFloat(e.target.value);
     params.growthSpeed = baseGrowthSpeed * mult;
     valSpeed.textContent = mult.toFixed(1) + "×";
+  });
+}
+
+if (elBloomProgress) {
+  elBloomProgress.addEventListener("input", (e) => {
+    const val = parseFloat(e.target.value);
+    params.bloomProgress = val;
+    valBloomProgress.textContent = val.toFixed(2);
+    params.autoBloom = false;
+    if (elAutoBloom) elAutoBloom.checked = false;
+    if (elPlay) elPlay.textContent = "▶ Play";
+  });
+}
+
+if (elWind) {
+  elWind.addEventListener("input", (e) => {
+    const val = parseFloat(e.target.value);
+    params.windIntensity = val;
+    valWind.textContent = val.toFixed(2);
+  });
+}
+
+if (elAutoBloom) {
+  elAutoBloom.addEventListener("change", (e) => {
+    params.autoBloom = e.target.checked;
+    if (elPlay) elPlay.textContent = params.autoBloom ? "⏸ Pause" : "▶ Play";
+  });
+}
+
+if (elPalette) {
+  elPalette.addEventListener("change", (e) => applyPalette(e.target.value));
+}
+
+if (elHueBase) {
+  elHueBase.addEventListener("input", (e) => {
+    const val = parseFloat(e.target.value);
+    params.hueBase = val;
+    valHueBase.textContent = val.toFixed(3);
+    updateColors();
+  });
+}
+
+if (elHueTip) {
+  elHueTip.addEventListener("input", (e) => {
+    const val = parseFloat(e.target.value);
+    params.hueTip = val;
+    valHueTip.textContent = val.toFixed(3);
+    updateColors();
+  });
+}
+
+if (elSaturation) {
+  elSaturation.addEventListener("input", (e) => {
+    const val = parseFloat(e.target.value);
+    params.saturation = val;
+    valSaturation.textContent = val.toFixed(2);
+    updateColors();
+  });
+}
+
+if (elLightness) {
+  elLightness.addEventListener("input", (e) => {
+    const val = parseFloat(e.target.value);
+    params.lightness = val;
+    valLightness.textContent = val.toFixed(2);
+    updateColors();
+  });
+}
+
+if (elFresnel) {
+  elFresnel.addEventListener("input", (e) => {
+    const val = parseFloat(e.target.value);
+    params.fresnelPow = val;
+    valFresnel.textContent = val.toFixed(1);
+    updateColors();
+  });
+}
+
+if (elGlow) {
+  elGlow.addEventListener("input", (e) => {
+    const val = parseFloat(e.target.value);
+    params.glow = val;
+    valGlow.textContent = val.toFixed(2);
+    updateColors();
   });
 }
 
@@ -1376,6 +1473,8 @@ if (elFocus) {
     params.bokehFocus = val;
     bokehPass.uniforms["focus"].value = val;
     valFocus.textContent = val.toFixed(0) + "m";
+    params.autofocus = false;
+    if (elAutofocus) elAutofocus.checked = false;
   });
 }
 
@@ -1389,13 +1488,54 @@ if (elAperture) {
   });
 }
 
-if (elPalette) {
-  elPalette.addEventListener("change", (e) => applyPalette(e.target.value));
+if (elMaxBlur) {
+  elMaxBlur.addEventListener("input", (e) => {
+    const val = parseFloat(e.target.value);
+    bokehPass.uniforms["maxblur"].value = val;
+    valMaxBlur.textContent = val.toFixed(3);
+  });
+}
+
+if (elBloomStrength) {
+  elBloomStrength.addEventListener("input", (e) => {
+    const val = parseFloat(e.target.value);
+    bloomPass.strength = val;
+    valBloomStrength.textContent = val.toFixed(2);
+  });
+}
+
+if (elBloomRadius) {
+  elBloomRadius.addEventListener("input", (e) => {
+    const val = parseFloat(e.target.value);
+    bloomPass.radius = val;
+    valBloomRadius.textContent = val.toFixed(2);
+  });
+}
+
+if (elBloomThreshold) {
+  elBloomThreshold.addEventListener("input", (e) => {
+    const val = parseFloat(e.target.value);
+    bloomPass.threshold = val;
+    valBloomThreshold.textContent = val.toFixed(2);
+  });
+}
+
+if (elRawRender) {
+  elRawRender.addEventListener("change", (e) => {
+    params.rawRender = e.target.checked;
+  });
+}
+
+if (elAutofocus) {
+  elAutofocus.addEventListener("change", (e) => {
+    params.autofocus = e.target.checked;
+  });
 }
 
 if (elPlay) {
   elPlay.addEventListener("click", () => {
     params.autoBloom = !params.autoBloom;
+    if (elAutoBloom) elAutoBloom.checked = params.autoBloom;
     elPlay.textContent = params.autoBloom ? "⏸ Pause" : "▶ Play";
   });
 }
@@ -1403,6 +1543,7 @@ if (elPlay) {
 if (elRewind) {
   elRewind.addEventListener("click", () => {
     params.autoBloom = true;
+    if (elAutoBloom) elAutoBloom.checked = true;
     if (elPlay) elPlay.textContent = "⏸ Pause";
     params.restartBloom();
   });
@@ -1410,8 +1551,6 @@ if (elRewind) {
 
 if (elExport) {
   elExport.addEventListener("click", () => {
-    // Force composer rendering immediately prior to canvas pixels readback
-    // to capture full bloom + bokeh effects correctly.
     composer.render();
     const link = document.createElement("a");
     link.download = `lycoris-${Date.now()}.png`;
@@ -1431,5 +1570,5 @@ if (tab && panel && closeBtn) {
   });
 }
 
-// sync dashboard particle slider with the initial spore count set above
+// Sync dashboard spore count
 setSporeCount(params.particleDensity);

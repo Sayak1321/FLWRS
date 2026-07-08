@@ -6,38 +6,124 @@
     body { margin: 0; overflow: hidden; background: black; }
 
     /* ============================================================
-       GLASSMORPHIC DASHBOARD  (additive — sits above the existing
-       dat.gui panel, does not touch any prior rendering logic)
+       GLASSMORPHIC DASHBOARD
     ============================================================ */
     * { box-sizing: border-box; }
     #bloomPanel {
       position: fixed;
       top: 24px;
       left: 24px;
-      width: 260px;
-      padding: 16px 16px 14px;
-      background: rgba(15, 15, 20, 0.6);
-      backdrop-filter: blur(12px);
-      -webkit-backdrop-filter: blur(12px);
+      width: 300px;
+      max-height: calc(100vh - 48px);
+      overflow-y: auto;
+      padding: 18px;
+      background: rgba(15, 15, 20, 0.75);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
       border: 1px solid rgba(255, 255, 255, 0.08);
       border-radius: 14px;
-      box-shadow: 0 12px 36px rgba(0,0,0,0.35);
+      box-shadow: 0 12px 36px rgba(0,0,0,0.45);
       color: rgba(240,242,248,0.92);
       font-family: 'Inter', system-ui, -apple-system, sans-serif;
       z-index: 20;
       transition: transform .3s ease, opacity .3s ease;
     }
+    
+    /* Beautiful Scrollbar for WebGL panel */
+    #bloomPanel::-webkit-scrollbar {
+      width: 6px;
+    }
+    #bloomPanel::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    #bloomPanel::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.12);
+      border-radius: 3px;
+    }
+    #bloomPanel::-webkit-scrollbar-thumb:hover {
+      background: rgba(255, 138, 107, 0.4);
+    }
+
     #bloomPanel.collapsed { transform: translateX(-120%); opacity: 0; pointer-events: none; }
     #bloomPanel h1 {
       font-size: 11px; letter-spacing: .14em; text-transform: uppercase;
-      font-weight: 600; margin: 0 0 12px; color: rgba(235,238,245,.55);
+      font-weight: 700; margin: 0 0 16px; color: rgba(235,238,245,.8);
       display: flex; align-items: center; justify-content: space-between;
     }
     #bloomPanel h1 .dot {
       width: 6px; height: 6px; border-radius: 50%; background: #ff8a6b;
       box-shadow: 0 0 8px #ff8a6b; display: inline-block; margin-right: 6px;
     }
+    
+    /* Details & Summary Accordions */
+    #bloomPanel details {
+      margin-bottom: 12px;
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      border-radius: 10px;
+      background: rgba(255, 255, 255, 0.02);
+      overflow: hidden;
+    }
+    #bloomPanel summary {
+      padding: 10px 12px;
+      font-size: 10.5px;
+      font-weight: 600;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      color: rgba(235, 238, 245, 0.7);
+      cursor: pointer;
+      user-select: none;
+      outline: none;
+      transition: background 0.2s, color 0.2s;
+      list-style: none;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    #bloomPanel summary::-webkit-details-marker {
+      display: none;
+    }
+    #bloomPanel summary::after {
+      content: '▸';
+      font-size: 9px;
+      color: rgba(235, 238, 245, 0.4);
+      transition: transform 0.2s;
+    }
+    #bloomPanel details[open] summary::after {
+      transform: rotate(90deg);
+    }
+    #bloomPanel summary:hover {
+      background: rgba(255, 255, 255, 0.04);
+      color: #fff;
+    }
+    #bloomPanel .details-content {
+      padding: 12px;
+      border-top: 1px solid rgba(255, 255, 255, 0.05);
+    }
+
     #bloomPanel .field { margin-bottom: 12px; }
+    #bloomPanel .field:last-child { margin-bottom: 0; }
+    
+    #bloomPanel .field-checkbox {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 12px;
+    }
+    #bloomPanel .field-checkbox:last-child { margin-bottom: 0; }
+    #bloomPanel .field-checkbox label {
+      font-size: 11px;
+      color: rgba(235,238,245,.55);
+      cursor: pointer;
+      margin-bottom: 0;
+    }
+    #bloomPanel .field-checkbox input[type="checkbox"] {
+      cursor: pointer;
+      accent-color: #ff8a6b;
+      width: 14px;
+      height: 14px;
+      margin: 0;
+    }
+
     #bloomPanel label {
       display: flex; justify-content: space-between; font-size: 11px;
       color: rgba(235,238,245,.55); margin-bottom: 5px;
@@ -96,39 +182,118 @@
       <span id="bloomClose" style="cursor:pointer;opacity:.6;">✕</span>
     </h1>
 
-    <div class="field">
-      <label>Flowers in field <b id="valFlowers">5</b></label>
-      <input type="range" id="ctrlFlowers" min="1" max="20" step="1" value="5" />
-    </div>
+    <!-- SECTION 1: FIELD & GROWTH -->
+    <details open>
+      <summary>Field & Growth</summary>
+      <div class="details-content">
+        <div class="field">
+          <label>Flowers in field <b id="valFlowers">5</b></label>
+          <input type="range" id="ctrlFlowers" min="1" max="20" step="1" value="5" />
+        </div>
+        <div class="field">
+          <label>Spacing <b id="valSpacing">14m</b></label>
+          <input type="range" id="ctrlSpacing" min="6" max="30" step="1" value="14" />
+        </div>
+        <div class="field">
+          <label>Growth speed multiplier <b id="valSpeed">1.0×</b></label>
+          <input type="range" id="ctrlSpeed" min="0.2" max="4" step="0.1" value="1" />
+        </div>
+        <div class="field">
+          <label>Manual Bloom Progress <b id="valBloomProgress">0.00</b></label>
+          <input type="range" id="ctrlBloomProgress" min="0" max="1" step="0.01" value="0" />
+        </div>
+        <div class="field">
+          <label>Wind Intensity <b id="valWind">1.00</b></label>
+          <input type="range" id="ctrlWind" min="0" max="3" step="0.05" value="1" />
+        </div>
+        <div class="field-checkbox">
+          <label for="ctrlAutoBloom">Auto Bloom</label>
+          <input type="checkbox" id="ctrlAutoBloom" checked />
+        </div>
+      </div>
+    </details>
 
-    <div class="field">
-      <label>Growth speed <b id="valSpeed">1.0×</b></label>
-      <input type="range" id="ctrlSpeed" min="0.2" max="4" step="0.1" value="1" />
-    </div>
+    <!-- SECTION 2: PETALS & COLOR -->
+    <details open>
+      <summary>Petals & Color</summary>
+      <div class="details-content">
+        <div class="field">
+          <label>Palette Presets</label>
+          <select id="ctrlPalette">
+            <option value="solar">Solar Glow</option>
+            <option value="neon">Bioluminescent Neon</option>
+            <option value="pastel" selected>Vintage Pastel (Lycoris)</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Hue Base <b id="valHueBase">0.000</b></label>
+          <input type="range" id="ctrlHueBase" min="0" max="1" step="0.001" value="0" />
+        </div>
+        <div class="field">
+          <label>Hue Tip <b id="valHueTip">0.040</b></label>
+          <input type="range" id="ctrlHueTip" min="0" max="1" step="0.001" value="0.04" />
+        </div>
+        <div class="field">
+          <label>Saturation <b id="valSaturation">1.00</b></label>
+          <input type="range" id="ctrlSaturation" min="0" max="1" step="0.01" value="1" />
+        </div>
+        <div class="field">
+          <label>Lightness <b id="valLightness">0.45</b></label>
+          <input type="range" id="ctrlLightness" min="0" max="1" step="0.01" value="0.45" />
+        </div>
+        <div class="field">
+          <label>Fresnel Power <b id="valFresnel">2.8</b></label>
+          <input type="range" id="ctrlFresnel" min="0.5" max="8" step="0.1" value="2.8" />
+        </div>
+        <div class="field">
+          <label>Velvet Glow <b id="valGlow">0.90</b></label>
+          <input type="range" id="ctrlGlow" min="0" max="3" step="0.05" value="0.9" />
+        </div>
+      </div>
+    </details>
 
-    <div class="field">
-      <label>Atmosphere density <b id="valDensity">400</b></label>
-      <input type="range" id="ctrlDensity" min="0" max="1200" step="20" value="400" />
-    </div>
-
-    <div class="field">
-      <label>Camera Focus <b id="valFocus">89m</b></label>
-      <input type="range" id="ctrlFocus" min="40" max="150" step="1" value="89" />
-    </div>
-
-    <div class="field">
-      <label>Lens Aperture <b id="valAperture">6</b></label>
-      <input type="range" id="ctrlAperture" min="0" max="25" step="1" value="6" />
-    </div>
-
-    <div class="field">
-      <label>Palette</label>
-      <select id="ctrlPalette">
-        <option value="solar">Solar Glow</option>
-        <option value="neon">Bioluminescent Neon</option>
-        <option value="pastel" selected>Vintage Pastel (Lycoris)</option>
-      </select>
-    </div>
+    <!-- SECTION 3: CINEMATIC EFFECTS (FX) -->
+    <details open>
+      <summary>Cinematic Effects</summary>
+      <div class="details-content">
+        <div class="field">
+          <label>Atmosphere density <b id="valDensity">400</b></label>
+          <input type="range" id="ctrlDensity" min="0" max="1200" step="20" value="400" />
+        </div>
+        <div class="field">
+          <label>Camera Focus <b id="valFocus">89m</b></label>
+          <input type="range" id="ctrlFocus" min="40" max="150" step="1" value="89" />
+        </div>
+        <div class="field">
+          <label>Lens Aperture <b id="valAperture">3</b></label>
+          <input type="range" id="ctrlAperture" min="0" max="25" step="1" value="3" />
+        </div>
+        <div class="field">
+          <label>Max Blur <b id="valMaxBlur">0.012</b></label>
+          <input type="range" id="ctrlMaxBlur" min="0" max="0.05" step="0.001" value="0.012" />
+        </div>
+        <div class="field">
+          <label>Bloom Strength <b id="valBloomStrength">0.30</b></label>
+          <input type="range" id="ctrlBloomStrength" min="0" max="2" step="0.01" value="0.3" />
+        </div>
+        <div class="field">
+          <label>Bloom Radius <b id="valBloomRadius">0.75</b></label>
+          <input type="range" id="ctrlBloomRadius" min="0" max="1" step="0.01" value="0.75" />
+        </div>
+        <div class="field">
+          <label>Bloom Threshold <b id="valBloomThreshold">0.18</b></label>
+          <input type="range" id="ctrlBloomThreshold" min="0" max="0.5" step="0.01" value="0.18" />
+        </div>
+        <div class="field-checkbox">
+          <label for="ctrlAutofocus">Autofocus Camera</label>
+          <input type="checkbox" id="ctrlAutofocus" checked />
+        </div>
+        <div class="field-checkbox">
+          <label for="ctrlRawRender">Raw Render (No FX)</label>
+          <input type="checkbox" id="ctrlRawRender" />
+        </div>
+      </div>
+    </details>
 
     <div class="divider"></div>
 
